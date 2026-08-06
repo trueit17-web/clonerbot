@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     # --- Mode ---
     mode: Mode = Mode.paper
     market: Market = Market.spot
+    # Virtual starting equity (quote currency) for paper mode.
+    paper_start_equity: float = 10_000.0
+    # How often (seconds) the executor polls open positions for SL/TP.
+    monitor_interval_sec: int = 15
+    # Quote currency the risk engine sizes and tracks equity in.
+    base_quote: str = "USDT"
 
     # --- Storage ---
     database_url: str = "sqlite+aiosqlite:///./clonerbot.db"
