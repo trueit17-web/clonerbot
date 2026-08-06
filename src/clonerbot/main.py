@@ -20,6 +20,18 @@ async def _run() -> None:
     await app.run()
 
 
+async def _login() -> None:
+    """One-time interactive Telegram login (creates the session file)."""
+    from clonerbot.ingest.telegram_listener import TelegramListener
+
+    settings = get_settings()
+    if not (settings.tg_api_id and settings.tg_api_hash):
+        print("TG_API_ID / TG_API_HASH are not set in .env — fill them first "
+              "(get them at https://my.telegram.org).")
+        return
+    await TelegramListener(settings).login()
+
+
 async def _check() -> None:
     """Validate config and exchange connectivity, then exit."""
     from clonerbot.db import init_db
@@ -70,7 +82,9 @@ async def _stats() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="clonerbot", description="Autonomous copy-trading bot")
-    parser.add_argument("command", choices=["run", "check", "stats"], nargs="?", default="run")
+    parser.add_argument(
+        "command", choices=["run", "login", "check", "stats"], nargs="?", default="run"
+    )
     parser.add_argument("--json-logs", action="store_true", help="emit JSON logs")
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
@@ -80,6 +94,8 @@ def main() -> None:
     try:
         if args.command == "run":
             asyncio.run(_run())
+        elif args.command == "login":
+            asyncio.run(_login())
         elif args.command == "check":
             asyncio.run(_check())
         elif args.command == "stats":

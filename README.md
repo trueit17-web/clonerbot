@@ -43,6 +43,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
 cp .env.example .env      # then fill in the values (see below)
+clonerbot login           # one-time Telegram login (phone + code)
 clonerbot run             # starts ingest → parse → risk → paper execution
 ```
 
@@ -78,6 +79,8 @@ The Telethon session is persisted in `./sessions` so you log in once.
 
 ## Commands
 
+- `clonerbot login` — one-time interactive Telegram login (creates the session
+  file and verifies channel access). Run this once before `run`.
 - `clonerbot run` — start the full pipeline.
 - `clonerbot stats` — print channel reputation and PnL.
 - `clonerbot check` — validate config and exchange connectivity, then exit.

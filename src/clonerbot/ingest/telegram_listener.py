@@ -22,7 +22,7 @@ log = get_logger("telegram")
 
 
 class TelegramListener:
-    def __init__(self, settings: Settings, queue: MessageQueue) -> None:
+    def __init__(self, settings: Settings, queue: MessageQueue | None = None) -> None:
         self._settings = settings
         self._queue = queue
         self._client = None
@@ -34,6 +34,38 @@ class TelegramListener:
         if not (s.tg_api_id and s.tg_api_hash):
             raise RuntimeError("TG_API_ID / TG_API_HASH not configured")
         return TelegramClient(s.tg_session, s.tg_api_id, s.tg_api_hash)
+
+    async def login(self) -> None:
+        """One-time interactive Telegram login.
+
+        Connects (prompting for phone + code on first run), persists the session
+        file, and verifies access to each configured channel — then disconnects.
+        This is the clean first-run step: no pipeline, no orders, just auth.
+        """
+        client = self._build_client()
+        await client.start()  # interactive prompts on first run only
+        try:
+            me = await client.get_me()
+            handle = f"@{me.username}" if getattr(me, "username", None) else str(me.id)
+            log.info("telegram.login_ok", account=handle)
+            print(f"✅ Logged in as {handle}. Session saved to: {self._settings.tg_session}")
+
+            channels = self._settings.tg_channels
+            if not channels:
+                print("⚠️  No TG_CHANNELS configured yet — add them to .env before `run`.")
+                return
+            print("Checking channel access:")
+            for c in channels:
+                c = c.strip()
+                target = int(c) if c.lstrip("-").isdigit() else c
+                try:
+                    entity = await client.get_entity(target)
+                    title = getattr(entity, "title", None) or getattr(entity, "username", c)
+                    print(f"  ✅ {c} → {title}")
+                except Exception as exc:
+                    print(f"  ❌ {c} → not reachable ({exc}). Join it with this account first.")
+        finally:
+            await client.disconnect()
 
     @staticmethod
     def _normalize_channel(chat) -> str:
