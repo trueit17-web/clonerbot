@@ -48,4 +48,5 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 # B008: FastAPI/pydantic-style defaults; UP042: str+Enum is intentional here.
-ignore = ["B008", "UP042"]
+# UP041: asyncio.TimeoutError is NOT builtin TimeoutError on 3.10 — keep it.
+ignore = ["B008", "UP042", "UP041"]

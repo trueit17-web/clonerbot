@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -69,6 +70,25 @@ async def test_kill_closes_all(executor):
     executor.killed = True
     n = await executor.close_all("kill")
     assert n == 2 and not executor.open_positions
+
+
+async def test_monitor_loop_survives_timeout_and_stops(fake_router):
+    # Regression: on Python 3.10 asyncio.wait_for raises asyncio.TimeoutError,
+    # which is NOT the builtin TimeoutError. If the interval-elapsed path were
+    # caught with the wrong type, the monitor task would crash after one tick
+    # and take the whole app down. interval=0 forces the timeout path every
+    # iteration; the loop must keep running until `stop` is set.
+    ex = Executor(settings=_settings(monitor_interval_sec=0), router=fake_router,
+                  scorer=ChannelScorer())
+    stop = asyncio.Event()
+
+    async def _stopper():
+        await asyncio.sleep(0.1)
+        stop.set()
+
+    # wait_for guards against a hang; a crash would propagate and fail the test.
+    await asyncio.wait_for(asyncio.gather(ex.monitor_loop(stop), _stopper()), timeout=5)
+    assert stop.is_set()
 
 
 async def test_recover_open_positions(fake_router):

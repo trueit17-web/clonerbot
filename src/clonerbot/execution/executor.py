@@ -225,7 +225,10 @@ class Executor:
                 log.warning("monitor.error", error=str(exc))
             try:
                 await asyncio.wait_for(stop.wait(), timeout=interval)
-            except TimeoutError:
+            except asyncio.TimeoutError:
+                # Interval elapsed → loop again. NOTE: on Python 3.10
+                # asyncio.TimeoutError is NOT the builtin TimeoutError, so we
+                # must catch it explicitly (do not let ruff UP041 rewrite this).
                 pass
 
     async def _check_positions(self) -> None:
