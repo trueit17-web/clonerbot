@@ -109,10 +109,14 @@ discover → you /approve → JOIN + OBSERVE (paper-only) → auto-promote → A
   back to paper.
 
 The control bot is fully button-driven (Russian UI): open it with `/start` to
-get the menu — 📊 Статус · 📈 Позиции · 🏆 Рейтинг каналов · 🔎 Искать каналы ·
-📋 Кандидаты · 🛑 Стоп-торговля · ▶️ Возобновить · 💸 Вывод. Candidates are
-approved or rejected with inline ✅ / 🚫 buttons; the emergency stop asks for
-confirmation before closing everything.
+get the menu — 📊 Статус · 📈 Позиции · 🧾 История сделок · 🏆 Рейтинг каналов ·
+➕ Добавить канал · 📋 Кандидаты · 🔎 Искать каналы · 🛑 Стоп-торговля ·
+▶️ Возобновить · 💸 Вывод. Candidates are approved or rejected with inline
+✅ / 🚫 buttons; the emergency stop asks for confirmation before closing
+everything. **➕ Добавить канал** adds a channel by @name (it starts in paper
+observe, same safe path as discovered ones). The channel-trust machinery is
+always on; only the periodic auto-search (🔎, incl. the optional tgstat source
+via `DISCOVERY_USE_TGSTAT`) is gated by `DISCOVERY_ENABLED`.
 
 ## Safety notes
 

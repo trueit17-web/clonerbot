@@ -95,6 +95,9 @@ class Settings(BaseSettings):
     )
     # How often to scan for new candidates.
     discovery_interval_sec: int = 3600
+    # Also scrape tgstat.ru catalog/search as a discovery source (best-effort,
+    # may be rate-limited/blocked; candidates still go through observe→promote).
+    discovery_use_tgstat: bool = False
     # Ignore channels smaller than this (weak signal-to-noise, likely junk).
     discovery_min_subscribers: int = 1000
     # Cap candidates surfaced per scan.

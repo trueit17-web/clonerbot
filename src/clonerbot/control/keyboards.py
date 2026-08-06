@@ -16,7 +16,9 @@ from aiogram.types import (
 # --- Main-menu button labels (also matched by the message handlers) ---
 BTN_STATUS = "📊 Статус"
 BTN_POSITIONS = "📈 Позиции"
+BTN_HISTORY = "🧾 История сделок"
 BTN_RATING = "🏆 Рейтинг каналов"
+BTN_ADD_CHANNEL = "➕ Добавить канал"
 BTN_CANDIDATES = "📋 Кандидаты"
 BTN_DISCOVER = "🔎 Искать каналы"
 BTN_WITHDRAW = "💸 Вывод средств"
@@ -36,10 +38,13 @@ def build_main_menu(discovery_enabled: bool) -> ReplyKeyboardMarkup:
     when discovery is enabled so the menu stays honest about what's available."""
     rows: list[list[KeyboardButton]] = [
         [KeyboardButton(text=BTN_STATUS), KeyboardButton(text=BTN_POSITIONS)],
-        [KeyboardButton(text=BTN_RATING)],
+        [KeyboardButton(text=BTN_HISTORY), KeyboardButton(text=BTN_RATING)],
+        # Manual add + candidate review are always available (trust machinery is
+        # always on); the periodic auto-search button appears only when enabled.
+        [KeyboardButton(text=BTN_ADD_CHANNEL), KeyboardButton(text=BTN_CANDIDATES)],
     ]
     if discovery_enabled:
-        rows.append([KeyboardButton(text=BTN_DISCOVER), KeyboardButton(text=BTN_CANDIDATES)])
+        rows.append([KeyboardButton(text=BTN_DISCOVER)])
     rows.append([KeyboardButton(text=BTN_KILL), KeyboardButton(text=BTN_RESUME)])
     rows.append([KeyboardButton(text=BTN_WITHDRAW), KeyboardButton(text=BTN_HELP)])
     return ReplyKeyboardMarkup(

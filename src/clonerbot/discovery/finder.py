@@ -28,9 +28,21 @@ class DiscoveryService:
         # get_client: callable returning the live Telethon client (owned by the
         # ingestor) so discovery reuses the same authenticated session.
         self._get_client = get_client
+        self._tgstat = None
+        if settings.discovery_use_tgstat:
+            from clonerbot.discovery.tgstat import TgstatSource
+
+            self._tgstat = TgstatSource()
 
     async def scan_once(self) -> int:
-        """Run one search pass across all keywords. Returns count of new candidates."""
+        """Run one search pass (Telethon + optional tgstat). Returns new candidates."""
+        new = await self._scan_telethon()
+        if self._tgstat is not None:
+            new += await self._scan_tgstat()
+        log.info("discovery.scan_done", new=new)
+        return new
+
+    async def _scan_telethon(self) -> int:
         client = self._get_client()
         if client is None:
             log.warning("discovery.no_client")
@@ -67,8 +79,21 @@ class DiscoveryService:
                 if is_new:
                     seen_new += 1
             await asyncio.sleep(1)  # be gentle with the API between keywords
+        return seen_new
 
-        log.info("discovery.scan_done", new=seen_new)
+    async def _scan_tgstat(self) -> int:
+        """Scrape tgstat for candidates. Subs unknown → skip the size floor."""
+        limit = self._s.discovery_max_candidates_per_scan
+        seen_new = 0
+        for keyword in self._s.discovery_keywords:
+            usernames = await self._tgstat.search(keyword, limit=limit)
+            for channel in usernames:
+                is_new = await self._store.upsert_discovered(
+                    channel=channel, title=None, subscribers=0, source=f"tgstat:{keyword}",
+                )
+                if is_new:
+                    seen_new += 1
+            await asyncio.sleep(1)
         return seen_new
 
     async def run(self, stop: asyncio.Event) -> None:

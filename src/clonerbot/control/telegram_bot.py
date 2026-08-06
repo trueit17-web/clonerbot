@@ -17,11 +17,15 @@ import asyncio
 import html
 import time
 
+from sqlalchemy import select
+
 from clonerbot.config import Settings
 from clonerbot.control import keyboards as kb
+from clonerbot.db import session_scope
 from clonerbot.exchange.router import ExchangeRouter
 from clonerbot.execution.executor import Executor
 from clonerbot.logging_conf import get_logger
+from clonerbot.models.db import Position
 from clonerbot.scoring.channel_scorer import ChannelScorer
 
 log = get_logger("control")
@@ -50,10 +54,50 @@ class ControlBot:
         self._finder = finder      # DiscoveryService
         self._listener = listener  # TelegramListener (for joining)
         self._admins = set(settings.control_admin_ids)
-        self._last_join = 0.0      # monotonic timestamp of the last join (cooldown)
+        # monotonic time of the last join, or None if we haven't joined yet.
+        # (None avoids a false cooldown on the first join, since monotonic()'s
+        # zero point is arbitrary and can be smaller than the cooldown.)
+        self._last_join: float | None = None
+        self._pending: dict[int, str] = {}  # user_id → awaited free-text action
 
     def _is_admin(self, user_id: int) -> bool:
         return user_id in self._admins
+
+    def _join_wait(self) -> float:
+        """Seconds to wait before the next join (0 if allowed now)."""
+        if self._last_join is None:
+            return 0.0
+        return self._s.join_cooldown_sec - (time.monotonic() - self._last_join)
+
+    # ------------------------------------------------------------------ actions
+    async def add_channel(self, channel: str) -> str:
+        """Join a channel and start OBSERVING it (paper-first). Returns a status text.
+
+        Manually added channels follow the same safe path as discovered ones:
+        they trade on paper until they prove out, then auto-promote. This keeps a
+        typo'd or over-hyped channel from touching real money on day one.
+        """
+        if self._listener is None:
+            return "Приём Telegram не запущен — добавить канал сейчас нельзя."
+        channel = channel.strip()
+        if not channel.startswith("@"):
+            channel = "@" + channel.lstrip("@")
+        if " " in channel or len(channel) < 3:
+            return "Некорректное имя канала. Пример: @channelname"
+        wait = self._join_wait()
+        if wait > 0:
+            return f"⏳ Пауза между вступлениями: подождите {int(wait)} с."
+        try:
+            title = await self._listener.join_channel(channel)
+        except Exception as exc:
+            return f"❌ Не удалось вступить в {channel}: {exc}"
+        self._last_join = time.monotonic()
+        if self._store is not None:
+            await self._store.upsert_discovered(channel, title, 0, source="manual")
+            await self._store.approve(channel)
+        return (f"✅ Добавлен и подключён {channel} ({title}).\n"
+                f"👀 Наблюдение — торгует на бумаге до подтверждения профита, "
+                f"затем авто-допуск к деньгам.")
 
     # ------------------------------------------------------------------ content
     async def status_text(self) -> str:
@@ -82,6 +126,33 @@ class ControlBot:
                 f"   🛑 стоп {p.stop_loss:g} · 🎯 тейк {p.take_profit if p.take_profit else '—'}"
                 f" · 📡 {_esc(p.channel)}"
             )
+        return "\n".join(lines)
+
+    async def history_text(self, limit: int = 15) -> str:
+        async with session_scope() as s:
+            rows = (
+                await s.execute(
+                    select(Position)
+                    .where(Position.status == "closed")
+                    .order_by(Position.closed_at.desc())
+                    .limit(limit)
+                )
+            ).scalars().all()
+        if not rows:
+            return "🧾 Закрытых сделок пока нет."
+        lines = [f"<b>🧾 История сделок</b> (последние {len(rows)})"]
+        total = 0.0
+        for r in rows:
+            pnl = r.realized_pnl or 0.0
+            total += pnl
+            icon = "🟢" if pnl > 0 else ("🔴" if pnl < 0 else "⚪")
+            tag = "🧪" if r.is_paper else "💵"
+            reason = {"tp": "тейк", "sl": "стоп", "kill": "стоп-всё"}.get(r.close_reason or "", "—")
+            lines.append(
+                f"{icon} {tag} <b>{_esc(r.symbol)}</b> {pnl:+,.2f} "
+                f"({r.entry_price:g}→{(r.exit_price or 0):g}, {reason}) · 📡 {_esc(r.channel)}"
+            )
+        lines.append(f"\nΣ по показанным: <b>{total:+,.2f}</b> {self._s.base_quote}")
         return "\n".join(lines)
 
     async def rating_text(self) -> str:
@@ -138,9 +209,11 @@ class ControlBot:
                 "ℹ️ <b>Справка</b>\n\n"
                 "📊 Статус — капитал, PnL, просадка, стоп\n"
                 "📈 Позиции — открытые сделки\n"
+                "🧾 История сделок — последние закрытые сделки с PnL\n"
                 "🏆 Рейтинг каналов — winrate и PnL по каналам\n"
-                "🔎 Искать каналы — запустить поиск сигнальных каналов\n"
+                "➕ Добавить канал — подключить канал вручную (по @имени)\n"
                 "📋 Кандидаты — одобрить/отклонить найденные каналы (✅/🚫)\n"
+                "🔎 Искать каналы — запустить поиск сигнальных каналов\n"
                 "🛑 Стоп-торговля — аварийно закрыть всё (с подтверждением)\n"
                 "▶️ Возобновить — снять аварийный стоп\n"
                 "💸 Вывод средств — ручной вывод (ввод командой)\n\n"
@@ -161,6 +234,12 @@ class ControlBot:
             if await deny(message):
                 return
             await message.answer(self.positions_text(), parse_mode="HTML")
+
+        @dp.message(F.text == kb.BTN_HISTORY)
+        async def _history(message):  # noqa: ANN001
+            if await deny(message):
+                return
+            await message.answer(await self.history_text(), parse_mode="HTML")
 
         @dp.message(F.text == kb.BTN_RATING)
         async def _rating(message):  # noqa: ANN001
@@ -239,6 +318,28 @@ class ControlBot:
             except Exception as exc:
                 await message.answer(f"❌ Ошибка вывода: {_esc(exc)}")
 
+        # ----- manual add channel -----
+        @dp.message(F.text == kb.BTN_ADD_CHANNEL)
+        async def _add_prompt(message):  # noqa: ANN001
+            if await deny(message):
+                return
+            self._pending[message.from_user.id] = "add_channel"
+            await message.answer(
+                "➕ Отправьте <b>@имя_канала</b> (или ссылку t.me/имя), который нужно добавить.\n"
+                "Он начнёт торговать на бумаге, а к деньгам допустится после проверки.",
+                parse_mode="HTML",
+            )
+
+        @dp.message(Command("add"))
+        async def _add_cmd(message):  # noqa: ANN001
+            if await deny(message):
+                return
+            parts = (message.text or "").split()
+            if len(parts) != 2:
+                await message.answer("Формат: /add @channel")
+                return
+            await message.answer(await self.add_channel(parts[1]), parse_mode="HTML")
+
         # ----- discovery -----
         @dp.message(F.text == kb.BTN_DISCOVER)
         async def _discover(message):  # noqa: ANN001
@@ -293,7 +394,7 @@ class ControlBot:
             if self._store is None or self._listener is None:
                 await cb.answer("Поиск каналов выключен.", show_alert=True)
                 return
-            wait = self._s.join_cooldown_sec - (time.monotonic() - self._last_join)
+            wait = self._join_wait()
             if wait > 0:
                 await cb.answer(f"Пауза между вступлениями: подождите {int(wait)} с.",
                                 show_alert=True)
@@ -323,6 +424,17 @@ class ControlBot:
             await cb.message.edit_text(f"🚫 Канал <b>{_esc(channel)}</b> отклонён.",
                                        parse_mode="HTML")
             await cb.answer("Отклонён")
+
+        # ----- free-text catch-all (registered last): captures pending input -----
+        @dp.message(F.text)
+        async def _free_text(message):  # noqa: ANN001
+            if await deny(message):
+                return
+            action = self._pending.pop(message.from_user.id, None)
+            if action == "add_channel":
+                await message.answer(await self.add_channel(message.text), parse_mode="HTML")
+            else:
+                await message.answer("Не понял. Откройте меню: /start", reply_markup=menu)
 
         log.info("control.start", admins=list(self._admins))
         try:

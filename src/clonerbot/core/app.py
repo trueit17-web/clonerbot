@@ -41,27 +41,29 @@ class Application:
         self.listener = TelegramListener(settings, self.queue)
         self._stop = asyncio.Event()
 
-        # --- Discovery (optional; assembled only when enabled) ---
-        self.store = None
-        self.gate = None
-        self.finder = None
-        self.shadow = None
-        if settings.discovery_enabled:
-            from clonerbot.discovery.finder import DiscoveryService
-            from clonerbot.discovery.gate import ChannelGate
-            from clonerbot.discovery.promotion import PromotionService
-            from clonerbot.discovery.store import CandidateStore
+        # --- Channel trust machinery (ALWAYS on) ---
+        # The candidate store, gate, shadow executor and promotion service power
+        # both discovery AND manual channel-adding via the bot, so they are built
+        # unconditionally. Only the periodic auto-search (finder) is gated by
+        # DISCOVERY_ENABLED.
+        from clonerbot.discovery.finder import DiscoveryService
+        from clonerbot.discovery.gate import ChannelGate
+        from clonerbot.discovery.promotion import PromotionService
+        from clonerbot.discovery.store import CandidateStore
 
-            self.store = CandidateStore()
-            self.gate = ChannelGate(settings, self.store)
-            promotion = PromotionService(settings, self.store)
-            # Shadow executor: OBSERVING channels trade paper-only, and its closes
-            # feed the promotion service that graduates proven channels to ACTIVE.
-            self.shadow = Executor(
-                settings=settings, router=self.router, scorer=self.scorer,
-                force_paper=True, promotion=promotion,
-            )
-            self.finder = DiscoveryService(settings, self.store, lambda: self.listener.client)
+        self.store = CandidateStore()
+        self.gate = ChannelGate(settings, self.store)
+        promotion = PromotionService(settings, self.store)
+        # Shadow executor: OBSERVING channels trade paper-only, and its closes
+        # feed the promotion service that graduates proven channels to ACTIVE.
+        self.shadow = Executor(
+            settings=settings, router=self.router, scorer=self.scorer,
+            force_paper=True, promotion=promotion,
+        )
+        self.finder = (
+            DiscoveryService(settings, self.store, lambda: self.listener.client)
+            if settings.discovery_enabled else None
+        )
 
         self.pipeline = Pipeline(
             settings, self.parser, self.risk, self.executor, self.scorer,
@@ -92,12 +94,12 @@ class Application:
             asyncio.create_task(self.executor.monitor_loop(self._stop), name="monitor"),
         ]
 
-        # Shadow executor + discovery scan loop (only when discovery is enabled)
-        if self.shadow is not None:
-            await self.shadow.recover_open_positions()
-            tasks.append(
-                asyncio.create_task(self.shadow.monitor_loop(self._stop), name="shadow_monitor")
-            )
+        # Shadow executor (OBSERVING channels) always runs; discovery scan loop
+        # only when the auto-search is enabled.
+        await self.shadow.recover_open_positions()
+        tasks.append(
+            asyncio.create_task(self.shadow.monitor_loop(self._stop), name="shadow_monitor")
+        )
         if self.finder is not None:
             tasks.append(asyncio.create_task(self.finder.run(self._stop), name="discovery"))
 
@@ -111,11 +113,9 @@ class Application:
             )
             tasks.append(asyncio.create_task(self.control.run(self._stop), name="control"))
 
-        # Telegram ingest. With discovery on, listen broadly and filter via the
-        # gate (so newly-joined channels are picked up); otherwise use the fixed
-        # configured-channel filter.
-        has_channels = bool(self.settings.tg_channels) or self.settings.discovery_enabled
-        if self.settings.tg_api_id and has_channels:
+        # Telegram ingest: always listen broadly and filter via the gate, so
+        # both configured channels and channels added/joined later are picked up.
+        if self.settings.tg_api_id:
             tasks.append(asyncio.create_task(self.listener.start(gate=self.gate), name="ingest"))
         else:
             log.warning("app.no_ingest", reason="TG not configured; queue must be fed manually")

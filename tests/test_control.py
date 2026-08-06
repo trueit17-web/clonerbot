@@ -29,17 +29,20 @@ def _bot(router) -> ControlBot:
 
 
 # ------------------------------------------------------------------ keyboards
-def test_main_menu_hides_discovery_when_disabled():
+def test_main_menu_hides_only_search_when_disabled():
     menu = kb.build_main_menu(discovery_enabled=False)
     labels = {b.text for row in menu.keyboard for b in row}
+    # Core + always-on trust actions present; only the auto-search button hidden.
     assert kb.BTN_STATUS in labels and kb.BTN_KILL in labels
-    assert kb.BTN_DISCOVER not in labels and kb.BTN_CANDIDATES not in labels
+    assert kb.BTN_HISTORY in labels and kb.BTN_ADD_CHANNEL in labels
+    assert kb.BTN_CANDIDATES in labels
+    assert kb.BTN_DISCOVER not in labels
 
 
-def test_main_menu_shows_discovery_when_enabled():
+def test_main_menu_shows_search_when_enabled():
     menu = kb.build_main_menu(discovery_enabled=True)
     labels = {b.text for row in menu.keyboard for b in row}
-    assert kb.BTN_DISCOVER in labels and kb.BTN_CANDIDATES in labels
+    assert kb.BTN_DISCOVER in labels
 
 
 def test_candidate_kb_encodes_channel():
@@ -79,3 +82,67 @@ async def test_positions_text_with_position(fake_router):
 async def test_rating_text_empty(fake_router):
     bot = _bot(fake_router)
     assert "пока нет" in await bot.rating_text()
+
+
+# ------------------------------------------------------------------ history
+async def test_history_text_empty(fake_router):
+    bot = _bot(fake_router)
+    assert "пока нет" in await bot.history_text()
+
+
+async def test_history_text_lists_closed_trades(fake_router):
+    bot = _bot(fake_router)
+    plan = TradePlan(True, "ok", symbol="BTC/USDT", side=Side.buy, qty=0.01,
+                     entry_price=60000.0, stop_loss=58800.0, take_profit=66000.0)
+    await bot._executor.open_position(plan, channel="@vip", signal_id=None)
+    fake_router.set_price("BTC/USDT", 66000.0)
+    await bot._executor._check_positions()  # closes at TP
+    text = await bot.history_text()
+    assert "BTC/USDT" in text and "тейк" in text and "@vip" in text
+
+
+# ---------------------------------------------------------------- add channel
+class _FakeListener:
+    def __init__(self, ok=True):
+        self.ok = ok
+        self.joined = []
+
+    async def join_channel(self, channel):
+        if not self.ok:
+            raise RuntimeError("cannot join")
+        self.joined.append(channel)
+        return f"Title of {channel}"
+
+
+async def test_add_channel_joins_and_observes(fake_router):
+    from clonerbot.discovery import OBSERVING
+    from clonerbot.discovery.store import CandidateStore
+
+    s = _settings()
+    store = CandidateStore()
+    listener = _FakeListener(ok=True)
+    bot = ControlBot(s, Executor(settings=s, router=fake_router, scorer=ChannelScorer()),
+                     ChannelScorer(), fake_router, store=store, listener=listener)
+    msg = await bot.add_channel("newsignals")  # no @ prefix on purpose
+    assert "newsignals" in msg and listener.joined == ["@newsignals"]
+    cand = await store.get("@newsignals")
+    assert cand is not None and cand.status == OBSERVING
+
+
+async def test_add_channel_join_failure(fake_router):
+    s = _settings()
+    bot = ControlBot(s, Executor(settings=s, router=fake_router, scorer=ChannelScorer()),
+                     ChannelScorer(), fake_router, listener=_FakeListener(ok=False))
+    msg = await bot.add_channel("@bad")
+    assert "не удалось" in msg.lower()
+
+
+async def test_add_channel_cooldown(fake_router):
+    import time as _t
+
+    s = _settings(join_cooldown_sec=9999)
+    bot = ControlBot(s, Executor(settings=s, router=fake_router, scorer=ChannelScorer()),
+                     ChannelScorer(), fake_router, listener=_FakeListener(ok=True))
+    bot._last_join = _t.monotonic()  # just joined
+    msg = await bot.add_channel("@channel1")
+    assert "пауза" in msg.lower()
