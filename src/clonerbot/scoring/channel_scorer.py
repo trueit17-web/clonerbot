@@ -12,9 +12,10 @@ closed trades before it can earn a high multiplier (no over-reacting to one win)
 
 from __future__ import annotations
 
+from sqlalchemy import select
+
 from clonerbot.db import session_scope
 from clonerbot.models.db import ChannelStats
-from sqlalchemy import select
 
 # A brand-new channel starts here; it grows toward MAX with a proven record.
 MIN_MULTIPLIER = 0.5
@@ -38,22 +39,28 @@ class ChannelScorer:
             mult = MIN_MULTIPLIER + (MAX_MULTIPLIER - MIN_MULTIPLIER) * smoothed
             return round(max(MIN_MULTIPLIER, min(MAX_MULTIPLIER, mult)), 3)
 
+    async def _get_or_create(self, s, channel: str) -> ChannelStats:
+        row = await s.get(ChannelStats, channel)
+        if row is None:
+            # Initialize counters explicitly: column `default=0` is only applied
+            # at flush, so a freshly-constructed row would otherwise hold None.
+            row = ChannelStats(
+                channel=channel, signals_total=0, signals_parsed=0,
+                trades_closed=0, wins=0, cumulative_pnl=0.0,
+            )
+            s.add(row)
+        return row
+
     async def record_signal(self, channel: str, parsed: bool) -> None:
         async with session_scope() as s:
-            row = await s.get(ChannelStats, channel)
-            if row is None:
-                row = ChannelStats(channel=channel)
-                s.add(row)
+            row = await self._get_or_create(s, channel)
             row.signals_total += 1
             if parsed:
                 row.signals_parsed += 1
 
     async def record_close(self, channel: str, pnl: float) -> None:
         async with session_scope() as s:
-            row = await s.get(ChannelStats, channel)
-            if row is None:
-                row = ChannelStats(channel=channel)
-                s.add(row)
+            row = await self._get_or_create(s, channel)
             row.trades_closed += 1
             if pnl > 0:
                 row.wins += 1

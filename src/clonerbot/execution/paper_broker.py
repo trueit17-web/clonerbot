@@ -27,7 +27,10 @@ class PaperBroker:
         cost = qty * price
         fee = cost * TAKER_FEE
         self.cash -= cost + fee
-        log.info("paper.buy", qty=round(qty, 8), price=price, cost=round(cost, 2), cash=round(self.cash, 2))
+        log.info(
+            "paper.buy", qty=round(qty, 8), price=price,
+            cost=round(cost, 2), cash=round(self.cash, 2),
+        )
         return cost + fee
 
     def sell(self, qty: float, price: float) -> float:
@@ -35,5 +38,8 @@ class PaperBroker:
         proceeds = qty * price
         fee = proceeds * TAKER_FEE
         self.cash += proceeds - fee
-        log.info("paper.sell", qty=round(qty, 8), price=price, proceeds=round(proceeds, 2), cash=round(self.cash, 2))
+        log.info(
+            "paper.sell", qty=round(qty, 8), price=price,
+            proceeds=round(proceeds, 2), cash=round(self.cash, 2),
+        )
         return proceeds - fee

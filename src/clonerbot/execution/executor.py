@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from clonerbot.config import Settings
 from clonerbot.db import session_scope
@@ -64,12 +64,14 @@ class Executor:
     # ------------------------------------------------------------------ helpers
     @staticmethod
     def _utc_day() -> str:
-        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return datetime.now(UTC).strftime("%Y-%m-%d")
 
     def _roll_day(self) -> None:
         today = self._utc_day()
         if today != self._today:
-            log.info("executor.day_roll", prev=self._today, new=today, realized=self._realized_today)
+            log.info(
+                "executor.day_roll", prev=self._today, new=today, realized=self._realized_today
+            )
             self._today = today
             self._realized_today = 0.0
 
@@ -106,7 +108,9 @@ class Executor:
         )
 
     # ------------------------------------------------------------------ open
-    async def open_position(self, plan: TradePlan, channel: str, signal_id: int | None) -> OpenPos | None:
+    async def open_position(
+        self, plan: TradePlan, channel: str, signal_id: int | None
+    ) -> OpenPos | None:
         if self.killed:
             log.warning("executor.open_blocked", reason="killed")
             return None
@@ -186,7 +190,7 @@ class Executor:
             row = await s.get(Position, pos.id)
             if row is not None:
                 row.status = "closed"
-                row.closed_at = datetime.now(timezone.utc)
+                row.closed_at = datetime.now(UTC)
                 row.exit_price = exit_price
                 row.realized_pnl = pnl
                 row.close_reason = reason
@@ -218,7 +222,7 @@ class Executor:
                 log.warning("monitor.error", error=str(exc))
             try:
                 await asyncio.wait_for(stop.wait(), timeout=interval)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
     async def _check_positions(self) -> None:
