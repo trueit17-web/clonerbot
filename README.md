@@ -85,6 +85,32 @@ The Telethon session is persisted in `./sessions` so you log in once.
 - `clonerbot stats` — print channel reputation and PnL.
 - `clonerbot check` — validate config and exchange connectivity, then exit.
 
+## Channel discovery (optional, OFF by default)
+
+The bot can find candidate signal channels for you instead of you listing them
+all by hand. Set `CLONERBOT_DISCOVERY_ENABLED=true` and it will periodically
+search public channels by `DISCOVERY_KEYWORDS` and surface candidates. It never
+auto-joins and never auto-trusts — the flow is deliberately gated:
+
+```
+discover → you /approve → JOIN + OBSERVE (paper-only) → auto-promote → ACTIVE (real)
+```
+
+- **Discovery proposes, you approve.** Auto-joining channels risks a Telegram
+  ban on your account, so joins happen only on your `/approve` and are
+  rate-limited by `JOIN_COOLDOWN_SEC`.
+- **New channels trade paper first.** An approved channel is `OBSERVING`: its
+  signals run through a shadow (paper) executor and never touch real money —
+  even in live mode — until it earns trust.
+- **Promotion is by demonstrated results.** After `PROMOTE_MIN_TRADES` closed
+  paper trades with win rate ≥ `PROMOTE_MIN_WINRATE` (and positive PnL), the
+  channel is promoted to `ACTIVE` and becomes eligible for real orders. If a
+  live channel's win rate later falls below `DEMOTE_WINRATE`, it's auto-demoted
+  back to paper.
+
+Control-bot commands: `/discover` (scan now), `/candidates` (list with status),
+`/approve @ch`, `/reject @ch`.
+
 ## Safety notes
 
 - Give exchange API keys **spot-trade permission only, withdrawals disabled**.

@@ -74,26 +74,39 @@ class TelegramListener:
             return f"@{username}"
         return str(getattr(chat, "id", "unknown"))
 
-    async def start(self) -> None:
-        """Connect, register the handler, and run until disconnected."""
+    @property
+    def client(self):
+        """The live Telethon client (None until start()); used by discovery/join."""
+        return self._client
+
+    async def join_channel(self, username: str) -> str:
+        """Join a public channel by @username. Returns its title. Raises on failure."""
+        if self._client is None:
+            raise RuntimeError("Telegram client not started")
+        from telethon.tl.functions.channels import JoinChannelRequest
+
+        entity = await self._client.get_entity(username)
+        await self._client(JoinChannelRequest(entity))
+        title = getattr(entity, "title", None) or username
+        log.info("telegram.joined", channel=username, title=title)
+        return title
+
+    async def start(self, gate=None) -> None:
+        """Connect, register the handler, and run until disconnected.
+
+        With a `gate` (discovery mode) we listen to ALL channels and filter each
+        message by gate.is_ingesting(), so channels joined later are picked up
+        without re-registering handlers. Without a gate we filter to the fixed
+        configured channels (legacy, more efficient).
+        """
         from telethon import events
 
         channels = self._settings.tg_channels
-        if not channels:
-            raise RuntimeError("No TG_CHANNELS configured")
-
-        # Telethon accepts usernames (@x) and numeric ids; normalize ids to int.
-        targets: list = []
-        for c in channels:
-            c = c.strip()
-            targets.append(int(c) if c.lstrip("-").isdigit() else c)
-
         self._client = self._build_client()
         await self._client.start()  # interactive on first run only
-        log.info("telegram.connected", channels=channels)
+        log.info("telegram.connected", channels=channels, discovery=gate is not None)
 
-        @self._client.on(events.NewMessage(chats=targets))
-        async def _handler(event) -> None:  # noqa: ANN001
+        async def _dispatch(event, channel: str) -> None:  # noqa: ANN001
             text = event.message.message or ""
             if not text.strip():
                 return
@@ -101,19 +114,32 @@ class TelegramListener:
             if posted and posted.tzinfo is None:
                 posted = posted.replace(tzinfo=timezone.utc)
             raw = RawMessage(
-                channel=self._normalize_channel(await event.get_chat()),
-                message_id=event.message.id,
-                text=text,
-                posted_at=posted,
+                channel=channel, message_id=event.message.id, text=text, posted_at=posted
             )
             accepted = await self._queue.put(raw)
             log.info(
-                "telegram.message",
-                channel=raw.channel,
-                message_id=raw.message_id,
-                queued=accepted,
-                preview=text[:80].replace("\n", " "),
+                "telegram.message", channel=raw.channel, message_id=raw.message_id,
+                queued=accepted, preview=text[:80].replace("\n", " "),
             )
+
+        if gate is None:
+            if not channels:
+                raise RuntimeError("No TG_CHANNELS configured")
+            stripped = (x.strip() for x in channels)
+            targets = [int(c) if c.lstrip("-").isdigit() else c for c in stripped]
+
+            @self._client.on(events.NewMessage(chats=targets))
+            async def _fixed(event) -> None:  # noqa: ANN001
+                await _dispatch(event, self._normalize_channel(await event.get_chat()))
+        else:
+            @self._client.on(events.NewMessage())
+            async def _dynamic(event) -> None:  # noqa: ANN001
+                if not getattr(event, "is_channel", False):
+                    return  # ignore DMs/groups; we only trade channel signals
+                channel = self._normalize_channel(await event.get_chat())
+                if not await gate.is_ingesting(channel):
+                    return  # not an approved/observing channel → skip
+                await _dispatch(event, channel)
 
         await self._client.run_until_disconnected()
 

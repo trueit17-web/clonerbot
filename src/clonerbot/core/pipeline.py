@@ -28,12 +28,22 @@ class Pipeline:
         risk: RiskEngine,
         executor: Executor,
         scorer: ChannelScorer,
+        gate=None,
+        shadow_executor: Executor | None = None,
     ) -> None:
         self._s = settings
         self._parser = parser
         self._risk = risk
-        self._executor = executor
+        self._executor = executor          # ACTIVE channels (real in live mode)
         self._scorer = scorer
+        self._gate = gate                  # None → single-executor legacy behavior
+        self._shadow = shadow_executor      # OBSERVING channels (always paper)
+
+    async def _route(self, channel: str) -> Executor:
+        """Pick the executor: ACTIVE → main, OBSERVING → shadow (paper-only)."""
+        if self._gate is None or self._shadow is None:
+            return self._executor
+        return self._executor if await self._gate.trades_real(channel) else self._shadow
 
     async def handle(self, msg: RawMessage) -> None:
         outcome = await self._parser.parse(msg)
@@ -47,12 +57,16 @@ class Pipeline:
         signal = outcome.signal
         signal_id = await self._audit(msg, outcome, status="parsed")
 
+        # Route to the real (ACTIVE) or shadow (OBSERVING, paper) executor.
+        executor = await self._route(signal.channel)
+        shadow = executor is self._shadow
+
         # Current market price for sizing (fallback to signal entry).
-        market_price = await self._executor.router.price(signal.symbol)
+        market_price = await executor.router.price(signal.symbol)
         if market_price is None:
             market_price = signal.reference_entry() or 0.0
 
-        state = await self._executor.portfolio_state()
+        state = await executor.portfolio_state()
         plan = await self._risk.evaluate(signal, state, market_price)
 
         if not plan.approved:
@@ -60,12 +74,13 @@ class Pipeline:
             log.info("pipeline.rejected", key=msg.dedup_key, reason=plan.reason)
             return
 
-        pos = await self._executor.open_position(plan, signal.channel, signal_id)
+        pos = await executor.open_position(plan, signal.channel, signal_id)
         if pos is None:
             await self._update_status(signal_id, "rejected", "executor declined")
             return
-        await self._update_status(signal_id, "executed", f"pos#{pos.id}")
-        log.info("pipeline.executed", key=msg.dedup_key, position_id=pos.id)
+        status = "shadow" if shadow else "executed"
+        await self._update_status(signal_id, status, f"pos#{pos.id}")
+        log.info("pipeline.executed", key=msg.dedup_key, position_id=pos.id, shadow=shadow)
 
     # ------------------------------------------------------------------ audit
     async def _audit(self, msg: RawMessage, outcome: ParseOutcome, status: str) -> int:

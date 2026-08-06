@@ -37,12 +37,22 @@ class ControlBot:
         executor: Executor,
         scorer: ChannelScorer,
         router: ExchangeRouter,
+        store=None,
+        finder=None,
+        listener=None,
     ) -> None:
         self._s = settings
         self._executor = executor
         self._scorer = scorer
         self._router = router
+        self._store = store        # CandidateStore (discovery); None if disabled
+        self._finder = finder      # DiscoveryService
+        self._listener = listener  # TelegramListener (for joining)
         self._admins = set(settings.control_admin_ids)
+        self._last_join = 0.0      # monotonic timestamp of the last join (cooldown)
+
+    def _is_admin(self, user_id: int) -> bool:
+        return user_id in self._admins
 
     def _is_admin(self, user_id: int) -> bool:
         return user_id in self._admins
@@ -150,10 +160,92 @@ class ControlBot:
             except Exception as exc:
                 await message.answer(f"❌ Withdrawal failed: {exc}")
 
+        # ---------------------------------------------------------- discovery
+        @dp.message(Command("discover"))
+        @guard
+        async def _discover(message):  # noqa: ANN001
+            if self._finder is None:
+                await message.answer("Discovery is disabled (set DISCOVERY_ENABLED=true).")
+                return
+            await message.answer("🔎 Scanning for candidate channels…")
+            try:
+                n = await self._finder.scan_once()
+                await message.answer(f"Found {n} new candidate(s). See /candidates.")
+            except Exception as exc:
+                await message.answer(f"❌ Discovery failed: {exc}")
+
+        @dp.message(Command("candidates"))
+        @guard
+        async def _candidates(message):  # noqa: ANN001
+            if self._store is None:
+                await message.answer("Discovery is disabled.")
+                return
+            rows = await self._store.list_by_status()
+            if not rows:
+                await message.answer("No candidates yet. Run /discover.")
+                return
+            order = {"discovered": 0, "observing": 1, "active": 2, "rejected": 3}
+            rows.sort(key=lambda r: (order.get(r.status, 9), -r.subscribers))
+            lines = []
+            for r in rows[:30]:
+                mark = {"discovered": "🆕", "observing": "👀", "active": "✅",
+                        "rejected": "🚫"}.get(r.status, "•")
+                lines.append(f"{mark} `{r.channel}` — {r.status} "
+                             f"({r.subscribers:,} subs){' — ' + r.title if r.title else ''}")
+            lines.append("\n`/approve @ch` to join+observe · `/reject @ch` to dismiss")
+            await message.answer("\n".join(lines), parse_mode="Markdown")
+
+        @dp.message(Command("approve"))
+        @guard
+        async def _approve(message):  # noqa: ANN001
+            if self._store is None or self._listener is None:
+                await message.answer("Discovery is disabled.")
+                return
+            parts = (message.text or "").split()
+            if len(parts) != 2:
+                await message.answer("Usage: `/approve @channel`", parse_mode="Markdown")
+                return
+            channel = parts[1] if parts[1].startswith("@") else f"@{parts[1]}"
+            cand = await self._store.get(channel)
+            if cand is None:
+                await message.answer(f"`{channel}` is not a known candidate.",
+                                     parse_mode="Markdown")
+                return
+            # Ban-safety: rate-limit joins.
+            import time
+            wait = self._s.join_cooldown_sec - (time.monotonic() - self._last_join)
+            if wait > 0:
+                await message.answer(f"⏳ Join cooldown: wait {int(wait)}s before the next join.")
+                return
+            try:
+                title = await self._listener.join_channel(channel)
+                self._last_join = time.monotonic()
+                await self._store.approve(channel)
+                await message.answer(f"✅ Joined `{channel}` ({title}). Now OBSERVING "
+                                     f"(paper-only until it proves out).", parse_mode="Markdown")
+            except Exception as exc:
+                await message.answer(f"❌ Could not join `{channel}`: {exc}",
+                                     parse_mode="Markdown")
+
+        @dp.message(Command("reject"))
+        @guard
+        async def _reject(message):  # noqa: ANN001
+            if self._store is None:
+                await message.answer("Discovery is disabled.")
+                return
+            parts = (message.text or "").split()
+            if len(parts) != 2:
+                await message.answer("Usage: `/reject @channel`", parse_mode="Markdown")
+                return
+            channel = parts[1] if parts[1].startswith("@") else f"@{parts[1]}"
+            ok = await self._store.reject(channel)
+            await message.answer("🚫 Rejected." if ok else "Unknown candidate.")
+
         @dp.message(F.text == "/start")
         async def _start(message):  # noqa: ANN001
             await message.answer(
-                "ClonerBot control. Commands: /status /positions /stats /kill /resume /withdraw"
+                "ClonerBot control. Commands: /status /positions /stats /kill /resume "
+                "/withdraw /discover /candidates /approve /reject"
             )
 
         log.info("control.start", admins=list(self._admins))

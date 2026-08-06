@@ -38,9 +38,35 @@ class Application:
         self.parser = SignalParser(LLMParser(), use_llm=bool(settings.anthropic_api_key))
         self.executor = Executor(settings=settings, router=self.router, scorer=self.scorer)
         self.risk = RiskEngine(settings, self.scorer)
-        self.pipeline = Pipeline(settings, self.parser, self.risk, self.executor, self.scorer)
         self.listener = TelegramListener(settings, self.queue)
         self._stop = asyncio.Event()
+
+        # --- Discovery (optional; assembled only when enabled) ---
+        self.store = None
+        self.gate = None
+        self.finder = None
+        self.shadow = None
+        if settings.discovery_enabled:
+            from clonerbot.discovery.finder import DiscoveryService
+            from clonerbot.discovery.gate import ChannelGate
+            from clonerbot.discovery.promotion import PromotionService
+            from clonerbot.discovery.store import CandidateStore
+
+            self.store = CandidateStore()
+            self.gate = ChannelGate(settings, self.store)
+            promotion = PromotionService(settings, self.store)
+            # Shadow executor: OBSERVING channels trade paper-only, and its closes
+            # feed the promotion service that graduates proven channels to ACTIVE.
+            self.shadow = Executor(
+                settings=settings, router=self.router, scorer=self.scorer,
+                force_paper=True, promotion=promotion,
+            )
+            self.finder = DiscoveryService(settings, self.store, lambda: self.listener.client)
+
+        self.pipeline = Pipeline(
+            settings, self.parser, self.risk, self.executor, self.scorer,
+            gate=self.gate, shadow_executor=self.shadow,
+        )
 
     async def _consume(self) -> None:
         while not self._stop.is_set():
@@ -66,16 +92,31 @@ class Application:
             asyncio.create_task(self.executor.monitor_loop(self._stop), name="monitor"),
         ]
 
+        # Shadow executor + discovery scan loop (only when discovery is enabled)
+        if self.shadow is not None:
+            await self.shadow.recover_open_positions()
+            tasks.append(
+                asyncio.create_task(self.shadow.monitor_loop(self._stop), name="shadow_monitor")
+            )
+        if self.finder is not None:
+            tasks.append(asyncio.create_task(self.finder.run(self._stop), name="discovery"))
+
         # Control bot (optional — only if a token is configured)
         if self.settings.control_bot_token:
             from clonerbot.control.telegram_bot import ControlBot
 
-            self.control = ControlBot(self.settings, self.executor, self.scorer, self.router)
+            self.control = ControlBot(
+                self.settings, self.executor, self.scorer, self.router,
+                store=self.store, finder=self.finder, listener=self.listener,
+            )
             tasks.append(asyncio.create_task(self.control.run(self._stop), name="control"))
 
-        # Telegram ingest (optional — only if configured; paper demos may omit it)
-        if self.settings.tg_api_id and self.settings.tg_channels:
-            tasks.append(asyncio.create_task(self.listener.start(), name="ingest"))
+        # Telegram ingest. With discovery on, listen broadly and filter via the
+        # gate (so newly-joined channels are picked up); otherwise use the fixed
+        # configured-channel filter.
+        has_channels = bool(self.settings.tg_channels) or self.settings.discovery_enabled
+        if self.settings.tg_api_id and has_channels:
+            tasks.append(asyncio.create_task(self.listener.start(gate=self.gate), name="ingest"))
         else:
             log.warning("app.no_ingest", reason="TG not configured; queue must be fed manually")
 

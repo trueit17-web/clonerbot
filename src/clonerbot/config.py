@@ -85,6 +85,28 @@ class Settings(BaseSettings):
     # Assumed adverse slippage per fill (fraction): buys fill higher, sells lower.
     paper_slippage: float = 0.0005
 
+    # --- Channel discovery (auto-find signal channels) ---
+    # Master switch; OFF by default so existing deployments are unaffected.
+    discovery_enabled: bool = False
+    # Keywords to search public Telegram channels for (comma-separated).
+    discovery_keywords: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["crypto signals", "futures signals", "trading signals"]
+    )
+    # How often to scan for new candidates.
+    discovery_interval_sec: int = 3600
+    # Ignore channels smaller than this (weak signal-to-noise, likely junk).
+    discovery_min_subscribers: int = 1000
+    # Cap candidates surfaced per scan.
+    discovery_max_candidates_per_scan: int = 20
+    # Minimum gap between joins — protects the user account from Telegram bans.
+    join_cooldown_sec: int = 1800
+    # Promotion gate: a discovered channel trades REAL money only after this many
+    # closed paper trades with at least this win rate (and positive cumulative PnL).
+    promote_min_trades: int = 10
+    promote_min_winrate: float = 0.55
+    # Auto-demote back to observe if win rate falls below this after enough trades.
+    demote_winrate: float = 0.40
+
     # ------------------------------------------------------------------
     # Parsers for comma-separated / JSON env values
     # ------------------------------------------------------------------
@@ -128,10 +150,14 @@ class Settings(BaseSettings):
             "daily_loss_limit",
             "max_drawdown",
             "default_stop_loss",
+            "promote_min_winrate",
+            "demote_winrate",
         ):
             val = getattr(self, name)
             if not (0 < val <= 1):
                 raise ValueError(f"{name} must be a fraction in (0, 1], got {val}")
+        if self.demote_winrate >= self.promote_min_winrate:
+            raise ValueError("demote_winrate must be below promote_min_winrate")
         # These may be 0 (feature disabled), so they allow [0, 1).
         for name in ("trailing_stop_pct", "paper_slippage"):
             val = getattr(self, name)

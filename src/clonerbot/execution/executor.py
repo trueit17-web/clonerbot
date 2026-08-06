@@ -50,6 +50,11 @@ class Executor:
     settings: Settings
     router: ExchangeRouter
     scorer: ChannelScorer
+    # When True this executor always paper-trades regardless of global mode —
+    # used for the "shadow" executor that runs OBSERVING (unproven) channels.
+    force_paper: bool = False
+    # Optional hook invoked after each close (used for channel auto-promotion).
+    promotion: object | None = None
     paper: PaperBroker = field(init=False)
     open_positions: dict[str, OpenPos] = field(default_factory=dict)  # symbol -> pos
     killed: bool = False
@@ -80,7 +85,7 @@ class Executor:
 
     @property
     def is_paper(self) -> bool:
-        return not self.settings.is_live
+        return self.force_paper or not self.settings.is_live
 
     # ------------------------------------------------------------------ equity
     async def _mark(self, symbol: str, fallback: float) -> float:
@@ -204,6 +209,12 @@ class Executor:
             "executor.closed", id=pos.id, symbol=symbol, reason=reason,
             exit=exit_price, pnl=round(pnl, 2), realized_today=round(self._realized_today, 2),
         )
+        # Let the promotion service re-evaluate this channel's track record.
+        if self.promotion is not None:
+            try:
+                await self.promotion.on_channel_close(pos.channel)
+            except Exception as exc:
+                log.warning("executor.promotion_hook_failed", error=str(exc))
         return pnl
 
     async def close_all(self, reason: str = "manual") -> int:

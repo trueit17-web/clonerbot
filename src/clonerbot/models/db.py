@@ -97,3 +97,28 @@ class EquitySnapshot(Base):
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
     equity: Mapped[float] = mapped_column(Float)
     realized_pnl_day: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class ChannelCandidate(Base):
+    """A channel found by discovery, tracked through its approval/trust lifecycle.
+
+    status lifecycle:
+      discovered → (user /approve) → observing → (auto-promote) → active
+                 ↘ (user /reject) → rejected
+      active → (auto-demote) → observing
+    Only `active` channels trade real money; `observing` ones trade paper-only.
+    """
+
+    __tablename__ = "channel_candidates"
+
+    channel: Mapped[str] = mapped_column(String(128), primary_key=True)  # normalized "@name"
+    title: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    subscribers: Mapped[int] = mapped_column(Integer, default=0)
+    source: Mapped[str] = mapped_column(String(64), default="search")  # how it was found
+    status: Mapped[str] = mapped_column(String(16), index=True, default="discovered")
+    joined: Mapped[bool] = mapped_column(default=False)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
