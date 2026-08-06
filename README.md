@@ -71,6 +71,34 @@ the risk-limit tunables.
 
 ## Deployment
 
+### Keep it running after you log out (systemd)
+
+Running `clonerbot run` in your SSH session stops when you disconnect. To keep
+the bot running across logout, crashes and reboots, install it as a service:
+
+```bash
+cd ~/clonerbot
+python3 -m venv .venv && source .venv/bin/activate && pip install -e .
+cp .env.example .env && nano .env       # fill in your keys
+clonerbot login                          # one-time interactive Telegram login
+bash deploy/install-service.sh           # install + start the systemd service
+```
+
+Then:
+
+```bash
+journalctl -u clonerbot -f               # live logs
+sudo systemctl status clonerbot          # is it running?
+sudo systemctl restart clonerbot         # after a git pull
+sudo systemctl stop clonerbot            # stop
+```
+
+`clonerbot login` must be done once **before** starting the service (the
+interactive login can't run under systemd); the saved `.session` file is reused
+automatically afterwards.
+
+### Docker (alternative)
+
 ```bash
 docker compose up -d     # bot + postgres + redis
 ```

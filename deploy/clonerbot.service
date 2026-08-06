@@ -1,0 +1,22 @@
+[Unit]
+# ClonerBot systemd service (reference template).
+# Prefer deploy/install-service.sh, which fills in the user/paths for you.
+Description=ClonerBot autonomous copy-trading bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Edit these two to your user and clone path:
+User=REPLACE_USER
+WorkingDirectory=REPLACE_APP_DIR
+# The app loads its own .env from WorkingDirectory, so no EnvironmentFile needed.
+# Use the module form so it works even if the console script isn't on PATH.
+ExecStart=REPLACE_APP_DIR/.venv/bin/python -m clonerbot.main run
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
