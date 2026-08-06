@@ -10,10 +10,10 @@ from __future__ import annotations
 import json
 from enum import Enum
 from functools import lru_cache
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Mode(str, Enum):
@@ -51,11 +51,13 @@ class Settings(BaseSettings):
     tg_api_id: int | None = None
     tg_api_hash: str | None = None
     tg_session: str = "clonerbot_user"
-    tg_channels: list[str] = Field(default_factory=list)
+    # NoDecode: keep pydantic-settings from JSON-parsing the env value so our
+    # comma-separated string reaches the validator below (e.g. "@a,@b").
+    tg_channels: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     # --- Telegram control bot (aiogram) ---
     control_bot_token: str | None = None
-    control_admin_ids: list[int] = Field(default_factory=list)
+    control_admin_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
 
     # --- Anthropic ---
     anthropic_api_key: str | None = None
@@ -70,7 +72,9 @@ class Settings(BaseSettings):
     max_position_fraction: float = 0.10
     daily_loss_limit: float = 0.05
     max_drawdown: float = 0.20
-    symbol_whitelist: list[str] = Field(default_factory=lambda: ["BTC", "ETH", "SOL"])
+    symbol_whitelist: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["BTC", "ETH", "SOL"]
+    )
     default_stop_loss: float = 0.03
     signal_max_age_sec: int = 300
     # Trailing stop: as price rises, the stop ratchets up to price*(1-this).
