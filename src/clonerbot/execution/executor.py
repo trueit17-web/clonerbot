@@ -42,6 +42,7 @@ class OpenPos:
     stop_loss: float
     take_profit: float | None
     cost: float  # cash spent incl. fees (paper) / notional (live)
+    high_water: float = 0.0  # highest mark seen, for the trailing stop
 
 
 @dataclass
@@ -57,7 +58,9 @@ class Executor:
     _today: str = ""
 
     def __post_init__(self) -> None:
-        self.paper = PaperBroker(self.settings.paper_start_equity)
+        self.paper = PaperBroker(
+            self.settings.paper_start_equity, slippage=self.settings.paper_slippage
+        )
         self.peak_equity = self.settings.paper_start_equity
         self._today = self._utc_day()
 
@@ -122,9 +125,9 @@ class Executor:
         fill_price = plan.entry_price
 
         if self.is_paper:
-            fill_price = await self._mark(plan.symbol, plan.entry_price)
+            mark = await self._mark(plan.symbol, plan.entry_price)
             qty = plan.qty
-            cost = self.paper.buy(qty, fill_price)
+            fill_price, cost = self.paper.buy(qty, mark)
         else:
             client = await self.router.pick(plan.symbol, quote)
             if client is None:
@@ -157,7 +160,7 @@ class Executor:
         pos = OpenPos(
             id=pos_id, exchange=exchange_id, symbol=plan.symbol, channel=channel,
             qty=qty, entry_price=fill_price, stop_loss=plan.stop_loss,
-            take_profit=plan.take_profit, cost=cost,
+            take_profit=plan.take_profit, cost=cost, high_water=fill_price,
         )
         self.open_positions[plan.symbol] = pos
         log.info(
@@ -175,7 +178,7 @@ class Executor:
         exit_price = await self._mark(symbol, pos.entry_price)
 
         if self.is_paper:
-            proceeds = self.paper.sell(pos.qty, exit_price)
+            exit_price, proceeds = self.paper.sell(pos.qty, exit_price)
             pnl = proceeds - pos.cost
         else:
             client = self.router.clients.get(pos.exchange)
@@ -230,10 +233,43 @@ class Executor:
             price = await self.router.price(symbol)
             if price is None:
                 continue
+            await self._apply_trailing(pos, price)
             if price <= pos.stop_loss:
                 await self.close_position(symbol, "sl")
             elif pos.take_profit is not None and price >= pos.take_profit:
                 await self.close_position(symbol, "tp")
+
+    async def _apply_trailing(self, pos: OpenPos, price: float) -> None:
+        """Ratchet the stop upward as price makes new highs (never downward).
+
+        With trailing_stop_pct = t, once price sets a new high H the stop is
+        raised to H*(1-t) if that is above the current stop. This locks in gains
+        while letting winners run; it can only tighten, never loosen.
+        """
+        t = self.settings.trailing_stop_pct
+        if t <= 0:
+            return
+        if price > pos.high_water:
+            pos.high_water = price
+            new_stop = price * (1 - t)
+            if new_stop > pos.stop_loss:
+                old = pos.stop_loss
+                pos.stop_loss = new_stop
+                log.info(
+                    "executor.trail", symbol=pos.symbol, price=price,
+                    old_stop=round(old, 8), new_stop=round(new_stop, 8),
+                )
+                # Persist so a restart recovers the tightened stop.
+                await self._persist_stop(pos.id, new_stop)
+
+    async def _persist_stop(self, pos_id: int, stop: float) -> None:
+        try:
+            async with session_scope() as s:
+                row = await s.get(Position, pos_id)
+                if row is not None and row.status == "open":
+                    row.stop_loss = stop
+        except Exception as exc:
+            log.warning("executor.persist_stop_failed", id=pos_id, error=str(exc))
 
     async def _snapshot_equity(self) -> None:
         eq = await self.equity()
@@ -259,6 +295,7 @@ class Executor:
                 id=row.id, exchange=row.exchange, symbol=row.symbol, channel=row.channel,
                 qty=row.qty, entry_price=row.entry_price, stop_loss=row.stop_loss or 0.0,
                 take_profit=row.take_profit, cost=row.qty * row.entry_price,
+                high_water=row.entry_price,
             )
         if rows:
             log.info("executor.recovered", count=len(rows))

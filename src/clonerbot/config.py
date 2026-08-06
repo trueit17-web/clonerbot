@@ -73,6 +73,13 @@ class Settings(BaseSettings):
     symbol_whitelist: list[str] = Field(default_factory=lambda: ["BTC", "ETH", "SOL"])
     default_stop_loss: float = 0.03
     signal_max_age_sec: int = 300
+    # Trailing stop: as price rises, the stop ratchets up to price*(1-this).
+    # 0 disables trailing (fixed stop only).
+    trailing_stop_pct: float = 0.0
+
+    # --- Paper simulation realism ---
+    # Assumed adverse slippage per fill (fraction): buys fill higher, sells lower.
+    paper_slippage: float = 0.0005
 
     # ------------------------------------------------------------------
     # Parsers for comma-separated / JSON env values
@@ -121,6 +128,11 @@ class Settings(BaseSettings):
             val = getattr(self, name)
             if not (0 < val <= 1):
                 raise ValueError(f"{name} must be a fraction in (0, 1], got {val}")
+        # These may be 0 (feature disabled), so they allow [0, 1).
+        for name in ("trailing_stop_pct", "paper_slippage"):
+            val = getattr(self, name)
+            if not (0 <= val < 1):
+                raise ValueError(f"{name} must be a fraction in [0, 1), got {val}")
         if self.max_open_positions < 1:
             raise ValueError("max_open_positions must be >= 1")
         if self.risk_per_trade > self.max_position_fraction:
