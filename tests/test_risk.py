@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -31,7 +31,7 @@ def _signal(**over) -> NormalizedSignal:
     data = dict(
         channel="@vip",
         message_id=1,
-        posted_at=datetime.now(UTC),
+        posted_at=datetime.now(timezone.utc),
         parse_method=ParseMethod.regex,
         base="BTC",
         entries=[60000.0],
@@ -85,7 +85,7 @@ async def test_reject_sell_side_spot(engine):
 
 
 async def test_reject_stale(engine):
-    old = datetime.now(UTC) - timedelta(hours=1)
+    old = datetime.now(timezone.utc) - timedelta(hours=1)
     plan = await engine.evaluate(_signal(posted_at=old), _state(), 60000)
     assert not plan.approved and "stale" in plan.reason
 

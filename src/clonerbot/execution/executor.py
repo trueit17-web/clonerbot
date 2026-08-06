@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from clonerbot.config import Settings
 from clonerbot.db import session_scope
@@ -67,7 +67,7 @@ class Executor:
     # ------------------------------------------------------------------ helpers
     @staticmethod
     def _utc_day() -> str:
-        return datetime.now(UTC).strftime("%Y-%m-%d")
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     def _roll_day(self) -> None:
         today = self._utc_day()
@@ -193,7 +193,7 @@ class Executor:
             row = await s.get(Position, pos.id)
             if row is not None:
                 row.status = "closed"
-                row.closed_at = datetime.now(UTC)
+                row.closed_at = datetime.now(timezone.utc)
                 row.exit_price = exit_price
                 row.realized_pnl = pnl
                 row.close_reason = reason

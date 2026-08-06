@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -13,7 +13,7 @@ from clonerbot.parser.signal_parser import SignalParser
 
 def _raw(text: str) -> RawMessage:
     return RawMessage(
-        channel="@test", message_id=1, text=text, posted_at=datetime.now(UTC)
+        channel="@test", message_id=1, text=text, posted_at=datetime.now(timezone.utc)
     )
 
 

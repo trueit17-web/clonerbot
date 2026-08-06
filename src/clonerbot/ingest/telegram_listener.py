@@ -11,7 +11,7 @@ runs are non-interactive.
 
 from __future__ import annotations
 
-from datetime import UTC
+from datetime import timezone
 
 from clonerbot.config import Settings
 from clonerbot.core.queue import MessageQueue
@@ -67,7 +67,7 @@ class TelegramListener:
                 return
             posted = event.message.date
             if posted and posted.tzinfo is None:
-                posted = posted.replace(tzinfo=UTC)
+                posted = posted.replace(tzinfo=timezone.utc)
             raw = RawMessage(
                 channel=self._normalize_channel(await event.get_chat()),
                 message_id=event.message.id,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -94,13 +94,13 @@ async def test_pipeline_end_to_end(fake_router):
     msg = RawMessage(
         channel="@vip", message_id=42,
         text="BTC/USDT buy entry 60000 tp 66000 sl 58800",
-        posted_at=datetime.now(UTC),
+        posted_at=datetime.now(timezone.utc),
     )
     await pipe.handle(msg)
     assert "BTC/USDT" in executor.open_positions
 
     # A quarantined (non-signal) message must NOT open anything.
     msg2 = RawMessage(channel="@vip", message_id=43, text="gm friends bullish vibes",
-                      posted_at=datetime.now(UTC))
+                      posted_at=datetime.now(timezone.utc))
     await pipe.handle(msg2)
     assert len(executor.open_positions) == 1

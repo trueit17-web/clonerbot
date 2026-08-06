@@ -7,7 +7,7 @@ add new signal sources later without touching the risk or execution engines.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 from pydantic import BaseModel, Field, field_validator
@@ -29,7 +29,7 @@ class RawMessage(BaseModel):
     channel: str
     message_id: int
     text: str
-    posted_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    posted_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
     def dedup_key(self) -> str:
@@ -82,7 +82,7 @@ class NormalizedSignal(BaseModel):
 
     @property
     def age_seconds(self) -> float:
-        return (datetime.now(UTC) - self.posted_at).total_seconds()
+        return (datetime.now(timezone.utc) - self.posted_at).total_seconds()
 
     def reference_entry(self) -> float | None:
         """Best single entry price to reason about (midpoint of the entry zone)."""

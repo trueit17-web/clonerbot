@@ -3,7 +3,7 @@ name = "clonerbot"
 version = "0.1.0"
 description = "Autonomous crypto copy-trading bot: parses Telegram signals and executes risk-managed spot trades across exchanges. Paper-mode first."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
     "pydantic>=2.6",
@@ -43,7 +43,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
