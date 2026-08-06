@@ -1,0 +1,32 @@
+services:
+  bot:
+    build: .
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      # override the .env defaults to use the compose services
+      CLONERBOT_DATABASE_URL: postgresql+asyncpg://clonerbot:clonerbot@postgres:5432/clonerbot
+      CLONERBOT_REDIS_URL: redis://redis:6379/0
+    volumes:
+      # persist the Telethon user session so you only log in once
+      - ./sessions:/app/sessions
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: clonerbot
+      POSTGRES_PASSWORD: clonerbot
+      POSTGRES_DB: clonerbot
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+volumes:
+  pgdata:
