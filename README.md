@@ -67,7 +67,7 @@ the risk-limit tunables.
 1. Run in paper mode for at least a week. Review stats: `clonerbot stats`.
 2. Confirm per-channel win-rates and that the parser isn't misreading messages.
 3. Set `CLONERBOT_MODE=live`, fund a **small** amount, keep risk limits tight.
-4. The KILL switch (`/kill` in the control bot) halts all trading instantly.
+4. The emergency stop (🛑 button in the control bot) halts all trading instantly.
 
 ## Deployment
 
@@ -97,7 +97,7 @@ discover → you /approve → JOIN + OBSERVE (paper-only) → auto-promote → A
 ```
 
 - **Discovery proposes, you approve.** Auto-joining channels risks a Telegram
-  ban on your account, so joins happen only on your `/approve` and are
+  ban on your account, so joins happen only when you tap ✅ Одобрить and are
   rate-limited by `JOIN_COOLDOWN_SEC`.
 - **New channels trade paper first.** An approved channel is `OBSERVING`: its
   signals run through a shadow (paper) executor and never touch real money —
@@ -108,8 +108,11 @@ discover → you /approve → JOIN + OBSERVE (paper-only) → auto-promote → A
   live channel's win rate later falls below `DEMOTE_WINRATE`, it's auto-demoted
   back to paper.
 
-Control-bot commands: `/discover` (scan now), `/candidates` (list with status),
-`/approve @ch`, `/reject @ch`.
+The control bot is fully button-driven (Russian UI): open it with `/start` to
+get the menu — 📊 Статус · 📈 Позиции · 🏆 Рейтинг каналов · 🔎 Искать каналы ·
+📋 Кандидаты · 🛑 Стоп-торговля · ▶️ Возобновить · 💸 Вывод. Candidates are
+approved or rejected with inline ✅ / 🚫 buttons; the emergency stop asks for
+confirmation before closing everything.
 
 ## Safety notes
 
