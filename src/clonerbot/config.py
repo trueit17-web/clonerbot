@@ -64,7 +64,8 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-sonnet-5"
 
     # --- Exchanges ---
-    exchanges: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # NoDecode + custom validator so an empty env value means {} (not a JSON error).
+    exchanges: Annotated[dict[str, dict[str, Any]], NoDecode] = Field(default_factory=dict)
 
     # --- Risk envelope ---
     risk_per_trade: float = 0.01
@@ -110,7 +111,7 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # Parsers for comma-separated / JSON env values
     # ------------------------------------------------------------------
-    @field_validator("tg_channels", "symbol_whitelist", mode="before")
+    @field_validator("tg_channels", "symbol_whitelist", "discovery_keywords", mode="before")
     @classmethod
     def _split_csv(cls, v: Any) -> Any:
         if isinstance(v, str):
