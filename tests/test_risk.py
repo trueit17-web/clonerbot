@@ -128,3 +128,16 @@ async def test_default_stop_applied_when_missing(engine):
     assert plan.approved
     # default_stop_loss = 0.03 → stop at 60000 * 0.97
     assert plan.stop_loss == pytest.approx(60000 * 0.97)
+
+
+async def test_position_capped_by_tradable(engine):
+    # Only 100 USDT free to trade → notional can't exceed 100 even though the
+    # risk/fraction caps would allow more.
+    plan = await engine.evaluate(_signal(), _state(tradable=100.0), market_price=60000)
+    assert plan.approved
+    assert plan.qty * plan.entry_price == pytest.approx(100.0, rel=1e-6)
+
+
+async def test_reject_when_no_tradable(engine):
+    plan = await engine.evaluate(_signal(), _state(tradable=0.0), market_price=60000)
+    assert not plan.approved and "funds" in plan.reason

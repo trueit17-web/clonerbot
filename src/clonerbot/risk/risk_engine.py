@@ -45,6 +45,9 @@ class PortfolioState:
     open_symbols: set[str]        # symbols with an open position
     open_count: int               # number of open positions
     killed: bool = False          # manual KILL switch engaged
+    # Free base-quote actually available to open a new position now (spot).
+    # Defaults to unlimited so callers that don't set it are unconstrained.
+    tradable: float = float("inf")
 
 
 @dataclass
@@ -127,15 +130,16 @@ class RiskEngine:
         risk_amount = state.equity * s.risk_per_trade * mult
         qty = risk_amount / (entry * stop_distance)
 
+        # The position may never cost more than what is actually free to trade
+        # right now (spot base-quote), nor more than the per-position fraction.
+        if state.tradable <= 0:
+            return reject("no funds available to trade")
         notional = qty * entry
-        cap = state.equity * s.max_position_fraction
+        cap = min(state.equity * s.max_position_fraction, state.tradable)
         if notional > cap:
             qty = cap / entry
             notional = cap
-        if notional > state.equity:
-            qty = state.equity / entry
-            notional = state.equity
-        if qty <= 0:
+        if qty <= 0 or notional <= 0:
             return reject("computed qty <= 0")
 
         tp = signal.take_profits[0] if signal.take_profits else None

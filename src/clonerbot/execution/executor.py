@@ -92,19 +92,28 @@ class Executor:
         price = await self.router.price(symbol)
         return price if price else fallback
 
+    async def available_cash(self) -> float:
+        """Free base-quote available to open new positions (the tradable amount).
+
+        paper: virtual cash. live: free base-quote across exchanges (the same
+        'доступно для торговли' figure surfaced in the status view)."""
+        if self.is_paper:
+            return self.paper.cash
+        return await self.router.total_quote_equity(self.settings.base_quote)
+
     async def equity(self) -> float:
         open_value = 0.0
         for pos in self.open_positions.values():
             open_value += pos.qty * await self._mark(pos.symbol, pos.entry_price)
-        if self.is_paper:
-            cash = self.paper.cash
-        else:
-            cash = await self.router.total_quote_equity(self.settings.base_quote)
-        return cash + open_value
+        return await self.available_cash() + open_value
 
     async def portfolio_state(self) -> PortfolioState:
         self._roll_day()
-        eq = await self.equity()
+        cash = await self.available_cash()
+        open_value = 0.0
+        for pos in self.open_positions.values():
+            open_value += pos.qty * await self._mark(pos.symbol, pos.entry_price)
+        eq = cash + open_value
         self.peak_equity = max(self.peak_equity, eq)
         return PortfolioState(
             equity=eq,
@@ -113,6 +122,7 @@ class Executor:
             open_symbols=set(self.open_positions.keys()),
             open_count=len(self.open_positions),
             killed=self.killed,
+            tradable=cash,  # size new positions from what's actually free to trade
         )
 
     # ------------------------------------------------------------------ open
