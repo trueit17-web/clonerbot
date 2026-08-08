@@ -91,6 +91,15 @@ class Application:
             exchanges=list(self.settings.exchanges.keys()),
         )
         await init_db()
+        # Apply a persisted live/paper override (set via the control bot) so the
+        # mode chosen at runtime survives restarts, overriding the .env default.
+        from clonerbot.config import Mode
+        from clonerbot.core.runtime import MODE_KEY, get_flag
+
+        override = await get_flag(MODE_KEY)
+        if override in (Mode.paper.value, Mode.live.value):
+            self.settings.mode = Mode(override)
+            log.info("app.mode_override", mode=override)
         await self.router.load_stored(self.creds)  # merge bot-added exchange keys
         await self.router.load()
         # Log a clear connectivity summary at startup so "did my keys work?" is
@@ -99,7 +108,7 @@ class Application:
             log.info(
                 "exchange.status", exchange=st.exchange, reachable=st.reachable,
                 authenticated=st.authenticated, quote_balance=st.quote_balance,
-                error=st.error,
+                wallets=st.wallets, error=st.error,
             )
         await self.executor.recover_open_positions()
 

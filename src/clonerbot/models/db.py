@@ -99,6 +99,19 @@ class EquitySnapshot(Base):
     realized_pnl_day: Mapped[float] = mapped_column(Float, default=0.0)
 
 
+class RuntimeSetting(Base):
+    """Small key→value store for settings changed at runtime via the bot
+    (e.g. the live/paper mode override), so they persist across restarts."""
+
+    __tablename__ = "runtime_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(256))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
 class ExchangeCredential(Base):
     """Exchange API credentials added at runtime (via the control bot).
 

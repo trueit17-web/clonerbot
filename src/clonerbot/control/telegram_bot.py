@@ -19,8 +19,9 @@ import time
 
 from sqlalchemy import select
 
-from clonerbot.config import Settings
+from clonerbot.config import Mode, Settings
 from clonerbot.control import keyboards as kb
+from clonerbot.core.runtime import MODE_KEY, set_flag
 from clonerbot.db import session_scope
 from clonerbot.exchange.router import ExchangeRouter
 from clonerbot.execution.executor import Executor
@@ -121,8 +122,13 @@ class ControlBot:
                 spot = "спот ✅" if st.spot else "спот ❌"
                 lines.append(
                     f"✅ <b>{_esc(st.exchange)}</b> — ключи ок · {spot} · "
-                    f"баланс {st.quote_balance:,.2f} {self._s.base_quote}"
+                    f"{self._s.base_quote}: {st.quote_balance:,.2f}"
                 )
+                if st.wallets:
+                    lines.append(f"   💼 кошельки: {_esc(st.wallets)}")
+                elif st.quote_balance == 0:
+                    lines.append("   💼 ненулевых балансов не найдено — проверьте, что средства "
+                                 "в спотовом/Unified кошельке и монета — " + self._s.base_quote)
         if self._executor.is_paper:
             lines.append("\nℹ️ Сейчас paper-режим: сделки считаются на бумаге. "
                          "Для реальной торговли поставьте CLONERBOT_MODE=live.")
@@ -156,6 +162,23 @@ class ControlBot:
             return (f"🟡 Биржа доступна, но ключи не прошли проверку: {_esc(st.error)}\n"
                     f"Проверьте права ключа (нужен спот) и повторите.")
         return f"❌ Биржа недоступна: {_esc(st.error)}"
+
+    async def remove_exchange(self, exchange_id: str) -> str:
+        ok = await self._router.remove_client(exchange_id)
+        if self._creds is not None:
+            await self._creds.delete(exchange_id)
+        return (f"🗑 Биржа <b>{_esc(exchange_id)}</b> удалена." if ok
+                else f"Биржа {_esc(exchange_id)} не найдена.")
+
+    async def set_mode(self, live: bool) -> str:
+        """Switch live/paper at runtime and persist the choice across restarts."""
+        self._s.mode = Mode.live if live else Mode.paper
+        await set_flag(MODE_KEY, self._s.mode.value)
+        log.info("control.mode_switch", mode=self._s.mode.value)
+        if live:
+            return ("🔴 Включён <b>LIVE</b> — сделки идут на реальные деньги.\n"
+                    "Проверьте лимиты риска и баланс на бирже.")
+        return "🧪 Возвращён <b>paper</b> — сделки считаются на бумаге."
 
     # ------------------------------------------------------------------ content
     async def status_text(self) -> str:
@@ -383,8 +406,10 @@ class ControlBot:
             if await deny(message):
                 return
             await message.answer(
-                "⚙️ <b>Настройки</b>\nПодключение бирж и API-ключи:",
-                reply_markup=kb.build_settings_kb(), parse_mode="HTML",
+                f"⚙️ <b>Настройки</b>\nТекущий режим: "
+                f"{'🔴 LIVE' if not self._executor.is_paper else '🧪 paper'}",
+                reply_markup=kb.build_settings_kb(not self._executor.is_paper),
+                parse_mode="HTML",
             )
 
         @dp.callback_query(F.data == kb.CB_EXCH_STATUS)
@@ -417,6 +442,59 @@ class ControlBot:
                 f"После отправки удалите сообщение с ключами из чата.",
                 parse_mode="HTML",
             )
+            await cb.answer()
+
+        @dp.callback_query(F.data == kb.CB_EXCH_DEL)
+        async def _exch_del(cb):  # noqa: ANN001
+            if await deny(cb):
+                return
+            ids = list(self._router.clients.keys())
+            if not ids:
+                await cb.answer("Нет подключённых бирж.", show_alert=True)
+                return
+            await cb.message.answer("Какую биржу удалить?",
+                                    reply_markup=kb.build_delete_picker_kb(ids))
+            await cb.answer()
+
+        @dp.callback_query(F.data.startswith(kb.CB_DELEX))
+        async def _delex(cb):  # noqa: ANN001
+            if await deny(cb):
+                return
+            ex_id = cb.data[len(kb.CB_DELEX):]
+            await cb.message.edit_text(await self.remove_exchange(ex_id), parse_mode="HTML")
+            await cb.answer("Удалено")
+
+        # ----- live/paper toggle -----
+        @dp.callback_query(F.data == kb.CB_MODE_PAPER)
+        async def _mode_paper(cb):  # noqa: ANN001
+            if await deny(cb):
+                return
+            await cb.message.answer(await self.set_mode(live=False), parse_mode="HTML")
+            await cb.answer()
+
+        @dp.callback_query(F.data == kb.CB_MODE_LIVE)
+        async def _mode_live(cb):  # noqa: ANN001
+            if await deny(cb):
+                return
+            await cb.message.answer(
+                "⚠️ <b>Переключить на LIVE?</b>\nСделки пойдут на реальные деньги "
+                "по подключённым биржам.",
+                reply_markup=kb.build_mode_confirm_kb(), parse_mode="HTML",
+            )
+            await cb.answer()
+
+        @dp.callback_query(F.data == kb.CB_MODE_LIVE_YES)
+        async def _mode_live_yes(cb):  # noqa: ANN001
+            if await deny(cb):
+                return
+            await cb.message.edit_text(await self.set_mode(live=True), parse_mode="HTML")
+            await cb.answer("LIVE включён")
+
+        @dp.callback_query(F.data == kb.CB_MODE_NO)
+        async def _mode_no(cb):  # noqa: ANN001
+            if await deny(cb):
+                return
+            await cb.message.edit_text("Отменено. Режим не изменён.")
             await cb.answer()
 
         # ----- manual add channel -----

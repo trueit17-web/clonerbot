@@ -38,6 +38,19 @@ class ExchangeRouter:
         self._clients[exchange_id] = CcxtClient(exchange_id, creds)
         log.info("router.add_client", exchange=exchange_id)
 
+    async def remove_client(self, exchange_id: str) -> bool:
+        """Remove a client at runtime (closing its ccxt session)."""
+        exchange_id = exchange_id.strip().lower()
+        client = self._clients.pop(exchange_id, None)
+        if client is None:
+            return False
+        try:
+            await client.close()
+        except Exception as exc:
+            log.warning("router.close_failed", exchange=exchange_id, error=str(exc))
+        log.info("router.remove_client", exchange=exchange_id)
+        return True
+
     async def load_stored(self, store) -> None:
         """Merge DB-stored credentials (added via the bot) into the router."""
         for cred in await store.all():

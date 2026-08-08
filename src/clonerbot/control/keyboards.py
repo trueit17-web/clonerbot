@@ -34,7 +34,13 @@ CB_KILL_YES = "kill:yes"
 CB_KILL_NO = "kill:no"
 CB_EXCH_STATUS = "exch:status"
 CB_EXCH_ADD = "exch:add"
-CB_ADDEX = "addex:"  # + ccxt exchange id
+CB_EXCH_DEL = "exch:del"
+CB_ADDEX = "addex:"    # + ccxt exchange id
+CB_DELEX = "delex:"    # + ccxt exchange id
+CB_MODE_LIVE = "mode:live"
+CB_MODE_PAPER = "mode:paper"
+CB_MODE_LIVE_YES = "mode:live:yes"
+CB_MODE_NO = "mode:no"
 
 # Common spot exchanges offered when adding one via the bot.
 KNOWN_EXCHANGES = ["bybit", "binance", "okx", "bitget", "kucoin", "gate", "mexc", "kraken"]
@@ -73,13 +79,39 @@ def build_candidate_kb(channel: str) -> InlineKeyboardMarkup:
     )
 
 
-def build_settings_kb() -> InlineKeyboardMarkup:
-    """Settings submenu: exchange connection status and adding a new exchange."""
+def build_settings_kb(is_live: bool) -> InlineKeyboardMarkup:
+    """Settings submenu: exchange status, add/remove exchange, mode toggle."""
+    mode_btn = (
+        InlineKeyboardButton(text="🧪 Вернуть paper", callback_data=CB_MODE_PAPER)
+        if is_live else
+        InlineKeyboardButton(text="🔴 Включить LIVE", callback_data=CB_MODE_LIVE)
+    )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🔌 Статус бирж", callback_data=CB_EXCH_STATUS)],
             [InlineKeyboardButton(text="➕ Добавить биржу", callback_data=CB_EXCH_ADD)],
+            [InlineKeyboardButton(text="🗑 Удалить биржу", callback_data=CB_EXCH_DEL)],
+            [mode_btn],
         ]
+    )
+
+
+def build_delete_picker_kb(exchange_ids: list[str]) -> InlineKeyboardMarkup:
+    """One delete button per currently-connected exchange."""
+    rows = [
+        [InlineKeyboardButton(text=f"🗑 {ex}", callback_data=f"{CB_DELEX}{ex}")]
+        for ex in exchange_ids
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_mode_confirm_kb() -> InlineKeyboardMarkup:
+    """Confirmation before switching to LIVE (real money)."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(text="⚠️ Да, включить LIVE", callback_data=CB_MODE_LIVE_YES),
+            InlineKeyboardButton(text="Отмена", callback_data=CB_MODE_NO),
+        ]]
     )
 
 

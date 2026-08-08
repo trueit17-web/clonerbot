@@ -21,8 +21,9 @@ class ExchangeStatus:
     reachable: bool          # public API reachable (markets loaded)
     authenticated: bool      # private API works (balance read) → keys valid
     spot: bool               # exchange advertises spot trading
-    quote_balance: float     # free balance in the base quote (e.g. USDT)
+    quote_balance: float     # best total balance in the base quote (e.g. USDT)
     error: str | None = None
+    wallets: str = ""        # human summary of non-zero balances across accounts
 
 
 class CcxtClient:
@@ -72,23 +73,56 @@ class CcxtClient:
         except Exception:
             return qty
 
+    # Account "wallets" to probe — exchanges like Bybit split funds across
+    # Unified / Spot / Funding, and a balance query for the wrong one returns 0.
+    _ACCOUNT_TYPES = ("unified", "spot", "funding", "trading", "contract")
+
     async def check(self, quote: str = "USDT") -> ExchangeStatus:
-        """Probe the exchange: public reachability, key validity, spot, balance."""
+        """Probe the exchange: public reachability, key validity, spot, balance.
+
+        Balance is read across multiple account types and merged, so funds held
+        in a Unified/Funding wallet (common on Bybit) are still found instead of
+        wrongly reported as 0.
+        """
         ex = self._get()
         try:
             await ex.load_markets()
         except Exception as exc:
             return ExchangeStatus(self.exchange_id, False, False, False, 0.0, str(exc))
         spot = bool((getattr(ex, "has", {}) or {}).get("spot", True))
-        try:
-            bal = await ex.fetch_balance()
-            free = (bal.get("free", {}) or {})
-            return ExchangeStatus(
-                self.exchange_id, True, True, spot, float(free.get(quote, 0.0) or 0.0)
-            )
-        except Exception as exc:
-            # Reachable, but private call failed → keys missing/invalid/no perms.
-            return ExchangeStatus(self.exchange_id, True, False, spot, 0.0, str(exc))
+
+        best_quote = 0.0
+        nonzero: dict[str, float] = {}
+        authed = False
+        last_err: str | None = None
+        # Try the default account, then each named account type.
+        for params in [{}] + [{"type": t} for t in self._ACCOUNT_TYPES]:
+            try:
+                bal = await ex.fetch_balance(params)
+            except Exception as exc:
+                last_err = str(exc)
+                continue
+            authed = True
+            totals = bal.get("total", {}) or {}
+            for asset, amount in totals.items():
+                try:
+                    amt = float(amount or 0)
+                except (TypeError, ValueError):
+                    continue
+                if amt > 0:
+                    # Keep the largest seen per asset (avoids double-counting when
+                    # an exchange ignores the account-type param).
+                    nonzero[asset] = max(nonzero.get(asset, 0.0), amt)
+            best_quote = max(best_quote, float(totals.get(quote, 0.0) or 0.0))
+
+        if not authed:
+            return ExchangeStatus(self.exchange_id, True, False, spot, 0.0, last_err)
+
+        top = sorted(nonzero.items(), key=lambda kv: kv[1], reverse=True)[:6]
+        wallets = ", ".join(f"{a}: {v:g}" for a, v in top)
+        return ExchangeStatus(
+            self.exchange_id, True, True, spot, best_quote, None, wallets
+        )
 
     async def close(self) -> None:
         if self._ex is not None:

@@ -63,15 +63,34 @@ def test_settings_menu_present():
     assert kb.BTN_SETTINGS in labels
 
 
-def test_settings_kb_has_status_and_add():
-    datas = [b.callback_data for row in kb.build_settings_kb().inline_keyboard for b in row]
+def test_settings_kb_paper_offers_go_live():
+    datas = [b.callback_data for row in kb.build_settings_kb(is_live=False).inline_keyboard
+             for b in row]
     assert kb.CB_EXCH_STATUS in datas and kb.CB_EXCH_ADD in datas
+    assert kb.CB_EXCH_DEL in datas and kb.CB_MODE_LIVE in datas
+
+
+def test_settings_kb_live_offers_paper():
+    datas = [b.callback_data for row in kb.build_settings_kb(is_live=True).inline_keyboard
+             for b in row]
+    assert kb.CB_MODE_PAPER in datas and kb.CB_MODE_LIVE not in datas
 
 
 def test_exchange_picker_covers_known():
     datas = [b.callback_data for row in kb.build_exchange_picker_kb().inline_keyboard for b in row]
     assert f"{kb.CB_ADDEX}bybit" in datas
     assert len(datas) == len(kb.KNOWN_EXCHANGES)
+
+
+def test_delete_picker_lists_exchanges():
+    datas = [b.callback_data for row in kb.build_delete_picker_kb(["bybit", "okx"]).inline_keyboard
+             for b in row]
+    assert datas == [f"{kb.CB_DELEX}bybit", f"{kb.CB_DELEX}okx"]
+
+
+def test_mode_confirm_kb():
+    datas = [b.callback_data for row in kb.build_mode_confirm_kb().inline_keyboard for b in row]
+    assert kb.CB_MODE_LIVE_YES in datas and kb.CB_MODE_NO in datas
 
 
 # -------------------------------------------------------------- text builders
@@ -196,6 +215,9 @@ class _FakeExRouter:
         from clonerbot.exchange.ccxt_client import ExchangeStatus
         return ExchangeStatus(exchange_id, True, True, True, 1234.5, None)
 
+    async def remove_client(self, exchange_id):
+        return self.clients.pop(exchange_id.lower(), None) is not None
+
     async def status_all(self, quote="USDT"):
         return [c._status for c in self.clients.values()]
 
@@ -241,3 +263,34 @@ async def test_add_exchange_auth_fails():
     bot = _bot_with(router)
     msg = await bot.add_exchange("bybit", "APIKEY123456 SECRET1234567")
     assert "не прошли проверку" in msg
+
+
+async def test_status_text_shows_wallets():
+    from clonerbot.exchange.ccxt_client import ExchangeStatus
+    st = ExchangeStatus("bybit", True, True, True, 0.0, None, wallets="USDC: 500, ETH: 0.2")
+    router = _FakeExRouter({"bybit": st})
+    router.add_client("bybit", {})
+    text = await _bot_with(router).exchange_status_text()
+    assert "USDC: 500" in text  # funds surfaced even though USDT total is 0
+
+
+async def test_remove_exchange():
+    router = _FakeExRouter()
+    router.add_client("bybit", {})
+    bot = _bot_with(router)
+    msg = await bot.remove_exchange("bybit")
+    assert "удалена" in msg and "bybit" not in router.clients
+
+
+async def test_set_mode_toggles_and_persists(fake_router):
+    from clonerbot.core.runtime import MODE_KEY, get_flag
+
+    bot = _bot_with(fake_router)
+    assert bot._executor.is_paper is True
+    msg = await bot.set_mode(live=True)
+    assert "LIVE" in msg
+    assert bot._executor.is_paper is False           # shared settings flipped
+    assert await get_flag(MODE_KEY) == "live"          # persisted
+    await bot.set_mode(live=False)
+    assert bot._executor.is_paper is True
+    assert await get_flag(MODE_KEY) == "paper"

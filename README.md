@@ -142,9 +142,11 @@ get the menu — 📊 Статус · 📈 Позиции · 🧾 История
 ▶️ Возобновить · 💸 Вывод · ⚙️ Настройки.
 
 **⚙️ Настройки** shows per-exchange connection status (🔌 Статус бирж — a live
-check of reachability, key validity and spot balance) and lets you add an
-exchange's API key/secret from the bot (➕ Добавить биржу). Keys added this way
-are stored in the DB and merged with `.env` on startup. Startup also logs an
+check of reachability, key validity and balances **across account types**, so
+funds in a Unified/Funding wallet aren't misreported as 0), and lets you add
+(➕), remove (🗑) exchanges and toggle 🔴 LIVE / 🧪 paper right from the bot
+(going LIVE asks for confirmation; the choice persists across restarts). Keys
+added via the bot are stored in the DB and merged with `.env` on startup. Startup also logs an
 `exchange.status` line per exchange, so "did my keys connect?" is answerable
 straight from `journalctl`. ⚠️ Sending API secrets through Telegram puts them in
 chat history — give keys **spot-only, withdrawals disabled**, and delete the
