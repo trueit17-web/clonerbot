@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     # --- Telegram control bot (aiogram) ---
     control_bot_token: str | None = None
     control_admin_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
+    # Push a message to admins on each trade open/close and channel promotion.
+    notify_trades: bool = True
 
     # --- Anthropic ---
     anthropic_api_key: str | None = None

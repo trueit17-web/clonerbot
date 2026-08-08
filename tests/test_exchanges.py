@@ -65,3 +65,19 @@ def test_router_add_client_lowercases():
     router = ExchangeRouter(_settings())
     router.add_client("ByBit", {"apiKey": "k", "secret": "s"})
     assert "bybit" in router.clients
+
+
+class _BalClient:
+    def __init__(self, bal):
+        self._bal = bal
+
+    async def fetch_quote_balance(self, quote):
+        return self._bal
+
+
+async def test_max_quote_balance_is_per_exchange_max():
+    router = ExchangeRouter(_settings())
+    router._clients = {"a": _BalClient(100.0), "b": _BalClient(250.0), "c": _BalClient(50.0)}
+    # sizing uses the single largest exchange (order runs on one), not the sum
+    assert await router.max_quote_balance("USDT") == 250.0
+    assert await router.total_quote_equity("USDT") == 400.0

@@ -55,6 +55,8 @@ class Executor:
     force_paper: bool = False
     # Optional hook invoked after each close (used for channel auto-promotion).
     promotion: object | None = None
+    # Optional async callable(text) to notify the operator of open/close events.
+    notifier: object | None = None
     paper: PaperBroker = field(init=False)
     open_positions: dict[str, OpenPos] = field(default_factory=dict)  # symbol -> pos
     killed: bool = False
@@ -87,33 +89,50 @@ class Executor:
     def is_paper(self) -> bool:
         return self.force_paper or not self.settings.is_live
 
+    @property
+    def _tag(self) -> str:
+        return "🧪 paper" if self.is_paper else "💵 LIVE"
+
+    async def _notify(self, text: str) -> None:
+        if self.notifier is None:
+            return
+        try:
+            await self.notifier(text)
+        except Exception as exc:
+            log.warning("executor.notify_failed", error=str(exc))
+
     # ------------------------------------------------------------------ equity
     async def _mark(self, symbol: str, fallback: float) -> float:
         price = await self.router.price(symbol)
         return price if price else fallback
 
-    async def available_cash(self) -> float:
-        """Free base-quote available to open new positions (the tradable amount).
-
-        paper: virtual cash. live: free base-quote across exchanges (the same
-        'доступно для торговли' figure surfaced in the status view)."""
+    async def equity_cash(self) -> float:
+        """Total free base-quote across all exchanges (for equity accounting)."""
         if self.is_paper:
             return self.paper.cash
         return await self.router.total_quote_equity(self.settings.base_quote)
 
-    async def equity(self) -> float:
-        open_value = 0.0
+    async def tradable_cash(self) -> float:
+        """Free base-quote actually spendable on a new position.
+
+        An order executes on ONE exchange (the one pick() chooses — the highest
+        balance), so the spendable amount is the per-exchange max, not the sum."""
+        if self.is_paper:
+            return self.paper.cash
+        return await self.router.max_quote_balance(self.settings.base_quote)
+
+    async def _open_value(self) -> float:
+        total = 0.0
         for pos in self.open_positions.values():
-            open_value += pos.qty * await self._mark(pos.symbol, pos.entry_price)
-        return await self.available_cash() + open_value
+            total += pos.qty * await self._mark(pos.symbol, pos.entry_price)
+        return total
+
+    async def equity(self) -> float:
+        return await self.equity_cash() + await self._open_value()
 
     async def portfolio_state(self) -> PortfolioState:
         self._roll_day()
-        cash = await self.available_cash()
-        open_value = 0.0
-        for pos in self.open_positions.values():
-            open_value += pos.qty * await self._mark(pos.symbol, pos.entry_price)
-        eq = cash + open_value
+        eq = await self.equity_cash() + await self._open_value()
         self.peak_equity = max(self.peak_equity, eq)
         return PortfolioState(
             equity=eq,
@@ -122,7 +141,9 @@ class Executor:
             open_symbols=set(self.open_positions.keys()),
             open_count=len(self.open_positions),
             killed=self.killed,
-            tradable=cash,  # size new positions from what's actually free to trade
+            # Size new positions from the balance of the exchange an order would
+            # actually use, not the cross-exchange sum.
+            tradable=await self.tradable_cash(),
         )
 
     # ------------------------------------------------------------------ open
@@ -183,6 +204,12 @@ class Executor:
             symbol=plan.symbol, qty=round(qty, 8), entry=fill_price,
             stop=plan.stop_loss, tp=plan.take_profit,
         )
+        await self._notify(
+            f"{self._tag} · <b>Открыта</b> {plan.symbol}\n"
+            f"📡 {channel}\n"
+            f"вход {fill_price:g} · объём {qty:g} (~{qty * fill_price:,.2f} {quote})\n"
+            f"🛑 стоп {plan.stop_loss:g} · 🎯 тейк {plan.take_profit if plan.take_profit else '—'}"
+        )
         return pos
 
     # ------------------------------------------------------------------ close
@@ -218,6 +245,12 @@ class Executor:
         log.info(
             "executor.closed", id=pos.id, symbol=symbol, reason=reason,
             exit=exit_price, pnl=round(pnl, 2), realized_today=round(self._realized_today, 2),
+        )
+        reason_ru = {"tp": "тейк 🎯", "sl": "стоп 🛑", "kill": "аварийный стоп"}.get(reason, reason)
+        icon = "🟢" if pnl > 0 else ("🔴" if pnl < 0 else "⚪")
+        await self._notify(
+            f"{self._tag} · <b>Закрыта</b> {symbol} {icon} <b>{pnl:+,.2f}</b>\n"
+            f"причина: {reason_ru} · 📡 {pos.channel}"
         )
         # Let the promotion service re-evaluate this channel's track record.
         if self.promotion is not None:

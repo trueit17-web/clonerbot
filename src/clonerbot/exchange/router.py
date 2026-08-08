@@ -93,6 +93,21 @@ class ExchangeRouter:
                 log.warning("router.balance_failed", exchange=client.exchange_id, error=str(exc))
         return total
 
+    async def max_quote_balance(self, quote: str = "USDT") -> float:
+        """Largest free quote balance on any single exchange.
+
+        This is what a new position can actually spend, because an order runs on
+        ONE exchange — the one pick() selects (the highest-balance one). Sizing
+        off the per-exchange max (not the cross-exchange sum) prevents ordering
+        more than the chosen exchange holds."""
+        best = 0.0
+        for client in self._clients.values():
+            try:
+                best = max(best, await client.fetch_quote_balance(quote))
+            except Exception as exc:
+                log.warning("router.balance_failed", exchange=client.exchange_id, error=str(exc))
+        return best
+
     async def pick(self, symbol: str, quote: str) -> CcxtClient | None:
         """Choose the exchange with the most free quote balance that lists symbol."""
         best: CcxtClient | None = None

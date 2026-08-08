@@ -136,6 +136,11 @@ discover → you /approve → JOIN + OBSERVE (paper-only) → auto-promote → A
   live channel's win rate later falls below `DEMOTE_WINRATE`, it's auto-demoted
   back to paper.
 
+The bot pushes a message to admins on every trade **open** and **close** (with
+PnL) and on channel **promotion/demotion** — so you can watch paper activity
+live and see which channels actually perform (toggle with `NOTIFY_TRADES`).
+The 🏆 Рейтинг каналов and 🧾 История сделок views summarize the same data.
+
 The control bot is fully button-driven (Russian UI): open it with `/start` to
 get the menu — 📊 Статус · 📈 Позиции · 🧾 История сделок · 🏆 Рейтинг каналов ·
 ➕ Добавить канал · 📋 Кандидаты · 🔎 Искать каналы · 🛑 Стоп-торговля ·

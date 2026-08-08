@@ -46,20 +46,39 @@ class Application:
         # both discovery AND manual channel-adding via the bot, so they are built
         # unconditionally. Only the periodic auto-search (finder) is gated by
         # DISCOVERY_ENABLED.
+        from clonerbot.control.notifier import Notifier
         from clonerbot.discovery.finder import DiscoveryService
         from clonerbot.discovery.gate import ChannelGate
         from clonerbot.discovery.promotion import PromotionService
         from clonerbot.discovery.store import CandidateStore
 
+        # Operator notifications (paper/live opens, closes, promotions).
+        self.notifier = (
+            Notifier(settings.control_bot_token, settings.control_admin_ids)
+            if settings.notify_trades else None
+        )
+
         self.store = CandidateStore()
         self.gate = ChannelGate(settings, self.store)
-        promotion = PromotionService(settings, self.store)
+
+        async def _on_promo(channel: str, status: str) -> None:
+            if self.notifier is None:
+                return
+            if status == "active":
+                await self.notifier.send(f"✅ Канал <b>{channel}</b> подтверждён по результатам "
+                                         f"и допущен к реальным сделкам.")
+            else:
+                await self.notifier.send(f"⬇️ Канал <b>{channel}</b> понижен обратно на бумагу "
+                                         f"(результаты ухудшились).")
+
+        promotion = PromotionService(settings, self.store, on_change=_on_promo)
         # Shadow executor: OBSERVING channels trade paper-only, and its closes
         # feed the promotion service that graduates proven channels to ACTIVE.
         self.shadow = Executor(
             settings=settings, router=self.router, scorer=self.scorer,
-            force_paper=True, promotion=promotion,
+            force_paper=True, promotion=promotion, notifier=self.notifier,
         )
+        self.executor.notifier = self.notifier
         self.finder = (
             DiscoveryService(settings, self.store, lambda: self.listener.client)
             if settings.discovery_enabled else None
@@ -159,3 +178,5 @@ class Application:
             t.cancel()
         await self.router.close()
         await self.queue.close()
+        if self.notifier is not None:
+            await self.notifier.close()

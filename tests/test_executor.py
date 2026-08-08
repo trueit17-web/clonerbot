@@ -91,6 +91,21 @@ async def test_monitor_loop_survives_timeout_and_stops(fake_router):
     assert stop.is_set()
 
 
+async def test_notifier_fires_on_open_and_close(fake_router):
+    events: list[str] = []
+
+    async def notify(text):
+        events.append(text)
+
+    ex = Executor(settings=_settings(), router=fake_router, scorer=ChannelScorer(),
+                  notifier=notify)
+    await ex.open_position(_plan(), channel="@vip", signal_id=None)
+    fake_router.set_price("BTC/USDT", 66000.0)  # TP
+    await ex._check_positions()
+    assert any("Открыта" in e and "@vip" in e for e in events)
+    assert any("Закрыта" in e and "тейк" in e for e in events)
+
+
 async def test_recover_open_positions(fake_router):
     ex1 = Executor(settings=_settings(), router=fake_router, scorer=ChannelScorer())
     await ex1.open_position(_plan(), channel="@vip", signal_id=None)
