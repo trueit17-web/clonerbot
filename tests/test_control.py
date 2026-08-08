@@ -274,6 +274,25 @@ async def test_status_text_shows_wallets():
     assert "USDC: 500" in text  # funds surfaced even though USDT total is 0
 
 
+async def test_status_text_tradable_line():
+    from clonerbot.exchange.ccxt_client import ExchangeStatus
+    st = ExchangeStatus("bybit", True, True, True, 300.0, None, wallets="USDT: 300", tradable=300.0)
+    router = _FakeExRouter({"bybit": st})
+    router.add_client("bybit", {})
+    text = await _bot_with(router).exchange_status_text()
+    assert "Доступно для торговли" in text and "300.00" in text
+
+
+async def test_status_text_funds_not_on_spot_hint():
+    from clonerbot.exchange.ccxt_client import ExchangeStatus
+    # money exists (unified) but tradable spot balance is 0 → warn to move it
+    st = ExchangeStatus("bybit", True, True, True, 500.0, None, wallets="USDT: 500", tradable=0.0)
+    router = _FakeExRouter({"bybit": st})
+    router.add_client("bybit", {})
+    text = await _bot_with(router).exchange_status_text()
+    assert "не на спотовом" in text
+
+
 async def test_remove_exchange():
     router = _FakeExRouter()
     router.add_client("bybit", {})

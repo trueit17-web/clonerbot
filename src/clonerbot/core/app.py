@@ -108,7 +108,7 @@ class Application:
             log.info(
                 "exchange.status", exchange=st.exchange, reachable=st.reachable,
                 authenticated=st.authenticated, quote_balance=st.quote_balance,
-                wallets=st.wallets, error=st.error,
+                tradable=st.tradable, wallets=st.wallets, error=st.error,
             )
         await self.executor.recover_open_positions()
 

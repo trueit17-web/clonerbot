@@ -21,9 +21,10 @@ class ExchangeStatus:
     reachable: bool          # public API reachable (markets loaded)
     authenticated: bool      # private API works (balance read) → keys valid
     spot: bool               # exchange advertises spot trading
-    quote_balance: float     # best total balance in the base quote (e.g. USDT)
+    quote_balance: float     # best total balance in the base quote (money anywhere)
     error: str | None = None
     wallets: str = ""        # human summary of non-zero balances across accounts
+    tradable: float = 0.0    # free base-quote in the account orders draw from
 
 
 class CcxtClient:
@@ -92,10 +93,12 @@ class CcxtClient:
         spot = bool((getattr(ex, "has", {}) or {}).get("spot", True))
 
         best_quote = 0.0
+        tradable = 0.0
         nonzero: dict[str, float] = {}
         authed = False
         last_err: str | None = None
-        # Try the default account, then each named account type.
+        # Try the default account first (the one orders draw from, given
+        # defaultType=spot), then each named account type.
         for params in [{}] + [{"type": t} for t in self._ACCOUNT_TYPES]:
             try:
                 bal = await ex.fetch_balance(params)
@@ -104,6 +107,9 @@ class CcxtClient:
                 continue
             authed = True
             totals = bal.get("total", {}) or {}
+            free = bal.get("free", {}) or {}
+            if not params:  # default account → what's actually tradable now
+                tradable = float(free.get(quote, 0.0) or 0.0)
             for asset, amount in totals.items():
                 try:
                     amt = float(amount or 0)
@@ -121,7 +127,7 @@ class CcxtClient:
         top = sorted(nonzero.items(), key=lambda kv: kv[1], reverse=True)[:6]
         wallets = ", ".join(f"{a}: {v:g}" for a, v in top)
         return ExchangeStatus(
-            self.exchange_id, True, True, spot, best_quote, None, wallets
+            self.exchange_id, True, True, spot, best_quote, None, wallets, tradable
         )
 
     async def close(self) -> None:

@@ -120,15 +120,19 @@ class ControlBot:
                 )
             else:
                 spot = "спот ✅" if st.spot else "спот ❌"
+                q = self._s.base_quote
                 lines.append(
                     f"✅ <b>{_esc(st.exchange)}</b> — ключи ок · {spot} · "
-                    f"{self._s.base_quote}: {st.quote_balance:,.2f}"
+                    f"всего {q}: {st.quote_balance:,.2f}"
                 )
+                lines.append(f"   🟢 Доступно для торговли: <b>{st.tradable:,.2f}</b> {q}")
                 if st.wallets:
                     lines.append(f"   💼 кошельки: {_esc(st.wallets)}")
-                elif st.quote_balance == 0:
-                    lines.append("   💼 ненулевых балансов не найдено — проверьте, что средства "
-                                 "в спотовом/Unified кошельке и монета — " + self._s.base_quote)
+                if st.tradable == 0 and (st.quote_balance > 0 or st.wallets):
+                    lines.append("   ⚠️ Средства есть, но не на спотовом торговом счёте — "
+                                 f"переведите их в спот {q}, чтобы бот мог торговать.")
+                elif st.tradable == 0 and not st.wallets:
+                    lines.append("   💼 ненулевых балансов не найдено — проверьте счёт и монету.")
         if self._executor.is_paper:
             lines.append("\nℹ️ Сейчас paper-режим: сделки считаются на бумаге. "
                          "Для реальной торговли поставьте CLONERBOT_MODE=live.")
