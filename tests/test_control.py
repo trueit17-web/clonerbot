@@ -58,6 +58,22 @@ def test_kill_confirm_kb():
     assert kb.CB_KILL_YES in datas and kb.CB_KILL_NO in datas
 
 
+def test_settings_menu_present():
+    labels = {b.text for row in kb.build_main_menu(False).keyboard for b in row}
+    assert kb.BTN_SETTINGS in labels
+
+
+def test_settings_kb_has_status_and_add():
+    datas = [b.callback_data for row in kb.build_settings_kb().inline_keyboard for b in row]
+    assert kb.CB_EXCH_STATUS in datas and kb.CB_EXCH_ADD in datas
+
+
+def test_exchange_picker_covers_known():
+    datas = [b.callback_data for row in kb.build_exchange_picker_kb().inline_keyboard for b in row]
+    assert f"{kb.CB_ADDEX}bybit" in datas
+    assert len(datas) == len(kb.KNOWN_EXCHANGES)
+
+
 # -------------------------------------------------------------- text builders
 async def test_status_text_ru(fake_router):
     bot = _bot(fake_router)
@@ -146,3 +162,82 @@ async def test_add_channel_cooldown(fake_router):
     bot._last_join = _t.monotonic()  # just joined
     msg = await bot.add_channel("@channel1")
     assert "пауза" in msg.lower()
+
+
+# --------------------------------------------------------------- exchanges UI
+class _FakeExClient:
+    def __init__(self, exchange, status):
+        self.exchange_id = exchange
+        self._status = status
+
+    async def check(self, quote="USDT"):
+        return self._status
+
+
+class _FakeExRouter:
+    def __init__(self, statuses=None):
+        from clonerbot.exchange.ccxt_client import ExchangeStatus  # noqa: F401
+
+        self.clients = {}
+        self._statuses = statuses or {}
+
+    @property
+    def has_exchanges(self):
+        return bool(self.clients)
+
+    def add_client(self, exchange_id, creds):
+        exchange_id = exchange_id.lower()
+        self.clients[exchange_id] = _FakeExClient(
+            exchange_id, self._statuses.get(exchange_id, self._default_ok(exchange_id))
+        )
+
+    @staticmethod
+    def _default_ok(exchange_id):
+        from clonerbot.exchange.ccxt_client import ExchangeStatus
+        return ExchangeStatus(exchange_id, True, True, True, 1234.5, None)
+
+    async def status_all(self, quote="USDT"):
+        return [c._status for c in self.clients.values()]
+
+
+def _bot_with(router) -> ControlBot:
+    s = _settings()
+    return ControlBot(s, Executor(settings=s, router=router, scorer=ChannelScorer()),
+                      ChannelScorer(), router)
+
+
+async def test_exchange_status_text_none():
+    bot = _bot_with(_FakeExRouter())
+    assert "Ни одна биржа" in await bot.exchange_status_text()
+
+
+async def test_exchange_status_text_authenticated():
+    from clonerbot.exchange.ccxt_client import ExchangeStatus
+    router = _FakeExRouter({"bybit": ExchangeStatus("bybit", True, True, True, 500.0, None)})
+    router.add_client("bybit", {})
+    bot = _bot_with(router)
+    text = await bot.exchange_status_text()
+    assert "bybit" in text and "ключи ок" in text and "500" in text
+
+
+async def test_add_exchange_success():
+    from clonerbot.exchange.ccxt_client import ExchangeStatus
+    router = _FakeExRouter({"bybit": ExchangeStatus("bybit", True, True, True, 42.0, None)})
+    bot = _bot_with(router)
+    msg = await bot.add_exchange("bybit", "APIKEY123456 SECRET1234567")
+    assert "подключена" in msg and "bybit" in msg
+    assert "bybit" in router.clients
+
+
+async def test_add_exchange_bad_keys_format():
+    bot = _bot_with(_FakeExRouter())
+    msg = await bot.add_exchange("bybit", "short")
+    assert "не разобрал" in msg.lower()
+
+
+async def test_add_exchange_auth_fails():
+    from clonerbot.exchange.ccxt_client import ExchangeStatus
+    router = _FakeExRouter({"bybit": ExchangeStatus("bybit", True, False, True, 0.0, "bad key")})
+    bot = _bot_with(router)
+    msg = await bot.add_exchange("bybit", "APIKEY123456 SECRET1234567")
+    assert "не прошли проверку" in msg

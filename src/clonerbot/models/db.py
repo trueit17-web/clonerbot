@@ -99,6 +99,24 @@ class EquitySnapshot(Base):
     realized_pnl_day: Mapped[float] = mapped_column(Float, default=0.0)
 
 
+class ExchangeCredential(Base):
+    """Exchange API credentials added at runtime (via the control bot).
+
+    Merged with any exchanges configured in .env at startup. NOTE: secrets are
+    stored as-is (like .env). Give keys spot-trade permission only, withdrawals
+    disabled, and protect the database file/host accordingly.
+    """
+
+    __tablename__ = "exchange_credentials"
+
+    exchange: Mapped[str] = mapped_column(String(32), primary_key=True)  # ccxt id, e.g. "bybit"
+    api_key: Mapped[str] = mapped_column(String(256))
+    secret: Mapped[str] = mapped_column(String(256))
+    password: Mapped[str | None] = mapped_column(String(256), nullable=True)  # passphrase
+    enabled: Mapped[bool] = mapped_column(default=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class ChannelCandidate(Base):
     """A channel found by discovery, tracked through its approval/trust lifecycle.
 

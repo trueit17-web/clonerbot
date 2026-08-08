@@ -11,7 +11,7 @@ data, no keys needed if the exchange allows it) but never places orders.
 from __future__ import annotations
 
 from clonerbot.config import Settings
-from clonerbot.exchange.ccxt_client import CcxtClient
+from clonerbot.exchange.ccxt_client import CcxtClient, ExchangeStatus
 from clonerbot.logging_conf import get_logger
 
 log = get_logger("router")
@@ -31,6 +31,28 @@ class ExchangeRouter:
     @property
     def has_exchanges(self) -> bool:
         return bool(self._clients)
+
+    def add_client(self, exchange_id: str, creds: dict) -> None:
+        """Add or replace a client at runtime (e.g. keys added via the bot)."""
+        exchange_id = exchange_id.strip().lower()
+        self._clients[exchange_id] = CcxtClient(exchange_id, creds)
+        log.info("router.add_client", exchange=exchange_id)
+
+    async def load_stored(self, store) -> None:
+        """Merge DB-stored credentials (added via the bot) into the router."""
+        for cred in await store.all():
+            if cred.enabled:
+                self.add_client(cred.exchange, cred.to_ccxt())
+
+    async def status_all(self, quote: str = "USDT") -> list[ExchangeStatus]:
+        """Probe every configured exchange for connectivity/auth/balance."""
+        out: list[ExchangeStatus] = []
+        for client in self._clients.values():
+            try:
+                out.append(await client.check(quote))
+            except Exception as exc:
+                out.append(ExchangeStatus(client.exchange_id, False, False, False, 0.0, str(exc)))
+        return out
 
     async def load(self) -> None:
         for ex_id, client in self._clients.items():

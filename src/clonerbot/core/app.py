@@ -70,6 +70,11 @@ class Application:
             gate=self.gate, shadow_executor=self.shadow,
         )
 
+        # Exchange credentials added at runtime via the bot (merged with .env).
+        from clonerbot.exchange.credentials import CredentialsStore
+
+        self.creds = CredentialsStore()
+
     async def _consume(self) -> None:
         while not self._stop.is_set():
             msg = await self.queue.get()
@@ -86,7 +91,16 @@ class Application:
             exchanges=list(self.settings.exchanges.keys()),
         )
         await init_db()
+        await self.router.load_stored(self.creds)  # merge bot-added exchange keys
         await self.router.load()
+        # Log a clear connectivity summary at startup so "did my keys work?" is
+        # answerable straight from the logs.
+        for st in await self.router.status_all(self.settings.base_quote):
+            log.info(
+                "exchange.status", exchange=st.exchange, reachable=st.reachable,
+                authenticated=st.authenticated, quote_balance=st.quote_balance,
+                error=st.error,
+            )
         await self.executor.recover_open_positions()
 
         tasks = [
@@ -110,6 +124,7 @@ class Application:
             self.control = ControlBot(
                 self.settings, self.executor, self.scorer, self.router,
                 store=self.store, finder=self.finder, listener=self.listener,
+                creds=self.creds,
             )
             tasks.append(asyncio.create_task(self.control.run(self._stop), name="control"))
 

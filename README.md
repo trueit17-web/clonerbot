@@ -139,7 +139,16 @@ discover → you /approve → JOIN + OBSERVE (paper-only) → auto-promote → A
 The control bot is fully button-driven (Russian UI): open it with `/start` to
 get the menu — 📊 Статус · 📈 Позиции · 🧾 История сделок · 🏆 Рейтинг каналов ·
 ➕ Добавить канал · 📋 Кандидаты · 🔎 Искать каналы · 🛑 Стоп-торговля ·
-▶️ Возобновить · 💸 Вывод. Candidates are approved or rejected with inline
+▶️ Возобновить · 💸 Вывод · ⚙️ Настройки.
+
+**⚙️ Настройки** shows per-exchange connection status (🔌 Статус бирж — a live
+check of reachability, key validity and spot balance) and lets you add an
+exchange's API key/secret from the bot (➕ Добавить биржу). Keys added this way
+are stored in the DB and merged with `.env` on startup. Startup also logs an
+`exchange.status` line per exchange, so "did my keys connect?" is answerable
+straight from `journalctl`. ⚠️ Sending API secrets through Telegram puts them in
+chat history — give keys **spot-only, withdrawals disabled**, and delete the
+message afterwards. Candidates are approved or rejected with inline
 ✅ / 🚫 buttons; the emergency stop asks for confirmation before closing
 everything. **➕ Добавить канал** adds a channel by @name (it starts in paper
 observe, same safe path as discovered ones). The channel-trust machinery is

@@ -45,6 +45,7 @@ class ControlBot:
         store=None,
         finder=None,
         listener=None,
+        creds=None,
     ) -> None:
         self._s = settings
         self._executor = executor
@@ -53,6 +54,7 @@ class ControlBot:
         self._store = store        # CandidateStore (discovery); None if disabled
         self._finder = finder      # DiscoveryService
         self._listener = listener  # TelegramListener (for joining)
+        self._creds = creds        # CredentialsStore (bot-managed exchange keys)
         self._admins = set(settings.control_admin_ids)
         # monotonic time of the last join, or None if we haven't joined yet.
         # (None avoids a false cooldown on the first join, since monotonic()'s
@@ -98,6 +100,62 @@ class ControlBot:
         return (f"✅ Добавлен и подключён {channel} ({title}).\n"
                 f"👀 Наблюдение — торгует на бумаге до подтверждения профита, "
                 f"затем авто-допуск к деньгам.")
+
+    async def exchange_status_text(self) -> str:
+        """Human-readable connection status for every configured exchange."""
+        if not self._router.has_exchanges:
+            return ("🔌 <b>Биржи</b>\nНи одна биржа не подключена.\n"
+                    "Нажмите «➕ Добавить биржу», чтобы задать API-ключи.")
+        statuses = await self._router.status_all(self._s.base_quote)
+        mode = "🧪 paper (реальных ордеров нет)" if self._executor.is_paper else "🔴 LIVE"
+        lines = [f"🔌 <b>Статус бирж</b> · режим: {mode}"]
+        for st in statuses:
+            if not st.reachable:
+                lines.append(f"❌ <b>{_esc(st.exchange)}</b> — недоступна ({_esc(st.error)})")
+            elif not st.authenticated:
+                lines.append(
+                    f"🟡 <b>{_esc(st.exchange)}</b> — подключена, но ключи не работают "
+                    f"({_esc(st.error)})"
+                )
+            else:
+                spot = "спот ✅" if st.spot else "спот ❌"
+                lines.append(
+                    f"✅ <b>{_esc(st.exchange)}</b> — ключи ок · {spot} · "
+                    f"баланс {st.quote_balance:,.2f} {self._s.base_quote}"
+                )
+        if self._executor.is_paper:
+            lines.append("\nℹ️ Сейчас paper-режим: сделки считаются на бумаге. "
+                         "Для реальной торговли поставьте CLONERBOT_MODE=live.")
+        return "\n".join(lines)
+
+    async def add_exchange(self, exchange_id: str, text: str) -> str:
+        """Save API creds for an exchange, wire it in, and test the connection."""
+        from clonerbot.exchange.credentials import parse_credentials
+
+        parsed = parse_credentials(text)
+        if parsed is None:
+            return ("Не разобрал ключи. Пришлите одним сообщением:\n"
+                    "<code>API_KEY SECRET</code> (и passphrase, если нужен).")
+        api_key, secret, password = parsed
+        if self._creds is not None:
+            await self._creds.upsert(exchange_id, api_key, secret, password)
+        creds = {"apiKey": api_key, "secret": secret}
+        if password:
+            creds["password"] = password
+        self._router.add_client(exchange_id, creds)
+        # Test right away so the user gets immediate confirmation.
+        try:
+            st = await self._router.clients[exchange_id].check(self._s.base_quote)
+        except Exception as exc:
+            return f"Ключи сохранены, но проверка не удалась: {_esc(exc)}"
+        if st.authenticated:
+            return (f"✅ <b>{_esc(exchange_id)}</b> подключена, ключи работают.\n"
+                    f"Баланс: {st.quote_balance:,.2f} {self._s.base_quote}\n"
+                    f"⚠️ Удалите сообщение с ключами из чата для безопасности.")
+        if st.reachable:
+            return (f"🟡 Биржа доступна, но ключи не прошли проверку: {_esc(st.error)}\n"
+                    f"Проверьте права ключа (нужен спот) и повторите.")
+        return f"❌ Биржа недоступна: {_esc(st.error)}"
 
     # ------------------------------------------------------------------ content
     async def status_text(self) -> str:
@@ -216,7 +274,8 @@ class ControlBot:
                 "🔎 Искать каналы — запустить поиск сигнальных каналов\n"
                 "🛑 Стоп-торговля — аварийно закрыть всё (с подтверждением)\n"
                 "▶️ Возобновить — снять аварийный стоп\n"
-                "💸 Вывод средств — ручной вывод (ввод командой)\n\n"
+                "💸 Вывод средств — ручной вывод (ввод командой)\n"
+                "⚙️ Настройки — статус бирж и добавление API-ключей\n\n"
                 "Новые каналы сначала торгуют <b>только на бумаге</b> и допускаются "
                 "к деньгам лишь после подтверждённого профита.",
                 reply_markup=menu, parse_mode="HTML",
@@ -317,6 +376,48 @@ class ControlBot:
                 await message.answer(f"✅ Заявка на вывод отправлена: {rid}")
             except Exception as exc:
                 await message.answer(f"❌ Ошибка вывода: {_esc(exc)}")
+
+        # ----- settings: exchanges -----
+        @dp.message(F.text == kb.BTN_SETTINGS)
+        async def _settings(message):  # noqa: ANN001
+            if await deny(message):
+                return
+            await message.answer(
+                "⚙️ <b>Настройки</b>\nПодключение бирж и API-ключи:",
+                reply_markup=kb.build_settings_kb(), parse_mode="HTML",
+            )
+
+        @dp.callback_query(F.data == kb.CB_EXCH_STATUS)
+        async def _exch_status(cb):  # noqa: ANN001
+            if await deny(cb):
+                return
+            await cb.answer("Проверяю…")
+            await cb.message.answer(await self.exchange_status_text(), parse_mode="HTML")
+
+        @dp.callback_query(F.data == kb.CB_EXCH_ADD)
+        async def _exch_add(cb):  # noqa: ANN001
+            if await deny(cb):
+                return
+            await cb.message.answer(
+                "Выберите биржу для добавления:", reply_markup=kb.build_exchange_picker_kb()
+            )
+            await cb.answer()
+
+        @dp.callback_query(F.data.startswith(kb.CB_ADDEX))
+        async def _addex_pick(cb):  # noqa: ANN001
+            if await deny(cb):
+                return
+            ex_id = cb.data[len(kb.CB_ADDEX):]
+            self._pending[cb.from_user.id] = f"addex:{ex_id}"
+            await cb.message.answer(
+                f"🔑 Пришлите ключи для <b>{_esc(ex_id)}</b> одним сообщением:\n"
+                f"<code>API_KEY SECRET</code>\n"
+                f"(если биржа требует passphrase — третьим словом).\n\n"
+                f"⚠️ Дайте ключу права только на <b>спот-торговлю</b>, вывод отключите. "
+                f"После отправки удалите сообщение с ключами из чата.",
+                parse_mode="HTML",
+            )
+            await cb.answer()
 
         # ----- manual add channel -----
         @dp.message(F.text == kb.BTN_ADD_CHANNEL)
@@ -433,6 +534,11 @@ class ControlBot:
             action = self._pending.pop(message.from_user.id, None)
             if action == "add_channel":
                 await message.answer(await self.add_channel(message.text), parse_mode="HTML")
+            elif action and action.startswith("addex:"):
+                ex_id = action.split(":", 1)[1]
+                await message.answer(
+                    await self.add_exchange(ex_id, message.text), parse_mode="HTML"
+                )
             else:
                 await message.answer("Не понял. Откройте меню: /start", reply_markup=menu)
 

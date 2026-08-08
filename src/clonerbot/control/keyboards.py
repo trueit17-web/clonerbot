@@ -22,6 +22,7 @@ BTN_ADD_CHANNEL = "➕ Добавить канал"
 BTN_CANDIDATES = "📋 Кандидаты"
 BTN_DISCOVER = "🔎 Искать каналы"
 BTN_WITHDRAW = "💸 Вывод средств"
+BTN_SETTINGS = "⚙️ Настройки"
 BTN_KILL = "🛑 Стоп-торговля"
 BTN_RESUME = "▶️ Возобновить"
 BTN_HELP = "ℹ️ Помощь"
@@ -31,6 +32,12 @@ CB_APPROVE = "apr:"
 CB_REJECT = "rej:"
 CB_KILL_YES = "kill:yes"
 CB_KILL_NO = "kill:no"
+CB_EXCH_STATUS = "exch:status"
+CB_EXCH_ADD = "exch:add"
+CB_ADDEX = "addex:"  # + ccxt exchange id
+
+# Common spot exchanges offered when adding one via the bot.
+KNOWN_EXCHANGES = ["bybit", "binance", "okx", "bitget", "kucoin", "gate", "mexc", "kraken"]
 
 
 def build_main_menu(discovery_enabled: bool) -> ReplyKeyboardMarkup:
@@ -46,7 +53,8 @@ def build_main_menu(discovery_enabled: bool) -> ReplyKeyboardMarkup:
     if discovery_enabled:
         rows.append([KeyboardButton(text=BTN_DISCOVER)])
     rows.append([KeyboardButton(text=BTN_KILL), KeyboardButton(text=BTN_RESUME)])
-    rows.append([KeyboardButton(text=BTN_WITHDRAW), KeyboardButton(text=BTN_HELP)])
+    rows.append([KeyboardButton(text=BTN_WITHDRAW), KeyboardButton(text=BTN_SETTINGS)])
+    rows.append([KeyboardButton(text=BTN_HELP)])
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,
@@ -63,6 +71,27 @@ def build_candidate_kb(channel: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🚫 Отклонить", callback_data=f"{CB_REJECT}{channel}"),
         ]]
     )
+
+
+def build_settings_kb() -> InlineKeyboardMarkup:
+    """Settings submenu: exchange connection status and adding a new exchange."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔌 Статус бирж", callback_data=CB_EXCH_STATUS)],
+            [InlineKeyboardButton(text="➕ Добавить биржу", callback_data=CB_EXCH_ADD)],
+        ]
+    )
+
+
+def build_exchange_picker_kb() -> InlineKeyboardMarkup:
+    """Grid of known exchanges to add (two per row)."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for i in range(0, len(KNOWN_EXCHANGES), 2):
+        rows.append([
+            InlineKeyboardButton(text=ex.capitalize(), callback_data=f"{CB_ADDEX}{ex}")
+            for ex in KNOWN_EXCHANGES[i:i + 2]
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def build_kill_confirm_kb() -> InlineKeyboardMarkup:

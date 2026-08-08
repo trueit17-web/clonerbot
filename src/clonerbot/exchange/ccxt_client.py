@@ -7,11 +7,22 @@ executor doesn't depend on ccxt directly and is trivial to mock in tests/paper.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from clonerbot.logging_conf import get_logger
 
 log = get_logger("ccxt")
+
+
+@dataclass
+class ExchangeStatus:
+    exchange: str
+    reachable: bool          # public API reachable (markets loaded)
+    authenticated: bool      # private API works (balance read) → keys valid
+    spot: bool               # exchange advertises spot trading
+    quote_balance: float     # free balance in the base quote (e.g. USDT)
+    error: str | None = None
 
 
 class CcxtClient:
@@ -60,6 +71,24 @@ class CcxtClient:
             return float(self._get().amount_to_precision(symbol, qty))
         except Exception:
             return qty
+
+    async def check(self, quote: str = "USDT") -> ExchangeStatus:
+        """Probe the exchange: public reachability, key validity, spot, balance."""
+        ex = self._get()
+        try:
+            await ex.load_markets()
+        except Exception as exc:
+            return ExchangeStatus(self.exchange_id, False, False, False, 0.0, str(exc))
+        spot = bool((getattr(ex, "has", {}) or {}).get("spot", True))
+        try:
+            bal = await ex.fetch_balance()
+            free = (bal.get("free", {}) or {})
+            return ExchangeStatus(
+                self.exchange_id, True, True, spot, float(free.get(quote, 0.0) or 0.0)
+            )
+        except Exception as exc:
+            # Reachable, but private call failed → keys missing/invalid/no perms.
+            return ExchangeStatus(self.exchange_id, True, False, spot, 0.0, str(exc))
 
     async def close(self) -> None:
         if self._ex is not None:
