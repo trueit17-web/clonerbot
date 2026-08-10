@@ -86,8 +86,11 @@ class Settings(BaseSettings):
     max_position_fraction: float = 0.10
     daily_loss_limit: float = 0.05
     max_drawdown: float = 0.20
-    symbol_whitelist: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["BTC", "ETH", "SOL"]
+    # Trading universe. Default: trade ANY coin except the blacklist. If the
+    # whitelist is non-empty it takes precedence (only those coins are traded).
+    symbol_whitelist: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    symbol_blacklist: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["USDT", "USDC", "DAI", "TUSD", "FDUSD", "USDE"]
     )
     default_stop_loss: float = 0.03
     signal_max_age_sec: int = 300
@@ -155,7 +158,8 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # Parsers for comma-separated / JSON env values
     # ------------------------------------------------------------------
-    @field_validator("tg_channels", "symbol_whitelist", "discovery_keywords", mode="before")
+    @field_validator("tg_channels", "symbol_whitelist", "symbol_blacklist",
+                     "discovery_keywords", mode="before")
     @classmethod
     def _split_csv(cls, v: Any) -> Any:
         if isinstance(v, str):
@@ -179,9 +183,9 @@ class Settings(BaseSettings):
             return json.loads(v)
         return v
 
-    @field_validator("symbol_whitelist", mode="after")
+    @field_validator("symbol_whitelist", "symbol_blacklist", mode="after")
     @classmethod
-    def _upper_whitelist(cls, v: list[str]) -> list[str]:
+    def _upper_symbols(cls, v: list[str]) -> list[str]:
         return [s.upper() for s in v]
 
     # ------------------------------------------------------------------

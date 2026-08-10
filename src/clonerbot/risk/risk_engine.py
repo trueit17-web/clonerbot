@@ -101,9 +101,13 @@ class RiskEngine:
             return reject("spot: sell signal is not a new position")
         is_long = signal.is_long
 
-        # 2) Whitelist
-        if s.symbol_whitelist and signal.base not in s.symbol_whitelist:
-            return reject(f"{signal.base} not in whitelist")
+        # 2) Trading universe: a non-empty whitelist restricts to those coins;
+        #    otherwise trade anything that isn't blacklisted.
+        if s.symbol_whitelist:
+            if signal.base not in s.symbol_whitelist:
+                return reject(f"{signal.base} not in whitelist")
+        elif signal.base in s.symbol_blacklist:
+            return reject(f"{signal.base} is blacklisted")
 
         # 3) Freshness
         if signal.age_seconds > s.signal_max_age_sec:

@@ -79,6 +79,24 @@ async def test_reject_not_whitelisted(engine):
     assert not plan.approved and "whitelist" in plan.reason
 
 
+async def test_blacklist_allows_all_others():
+    # Empty whitelist + blacklist → any non-blacklisted coin trades.
+    s = _settings(symbol_whitelist=[], symbol_blacklist=["DOGE"])
+    eng = RiskEngine(s, ChannelScorer())
+    ok = await eng.evaluate(_signal(base="PEPE"), _state(), market_price=1.0)
+    assert ok.approved                     # PEPE not blacklisted → allowed
+    blocked = await eng.evaluate(_signal(base="DOGE"), _state(), market_price=1.0)
+    assert not blocked.approved and "blacklist" in blocked.reason
+
+
+async def test_whitelist_takes_precedence_over_blacklist():
+    s = _settings(symbol_whitelist=["BTC"], symbol_blacklist=["BTC"])
+    eng = RiskEngine(s, ChannelScorer())
+    # whitelist wins: BTC is allowed even though also blacklisted
+    plan = await eng.evaluate(_signal(base="BTC"), _state(), market_price=60000)
+    assert plan.approved
+
+
 async def test_reject_sell_side_spot(engine):
     plan = await engine.evaluate(_signal(side=Side.sell), _state(), 60000)
     assert not plan.approved

@@ -39,7 +39,10 @@ async def _check() -> None:
 
     settings = get_settings()
     print(f"mode={settings.mode.value} market={settings.market.value}")
-    print(f"whitelist={settings.symbol_whitelist}")
+    if settings.symbol_whitelist:
+        print(f"whitelist={settings.symbol_whitelist} (only these traded)")
+    else:
+        print(f"blacklist={settings.symbol_blacklist} (all others traded)")
     print(f"risk_per_trade={settings.risk_per_trade} max_open={settings.max_open_positions} "
           f"daily_loss={settings.daily_loss_limit} max_dd={settings.max_drawdown}")
     print(f"anthropic={'set' if settings.anthropic_api_key else 'MISSING'}")
