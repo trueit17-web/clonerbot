@@ -51,6 +51,22 @@ def test_no_data():
     assert reason == "no_data"
 
 
+def test_trailing_stop_locks_in_gain():
+    # Rise to 120 (trail stop to 108), then drop to 105 → exit at trailed stop.
+    candles = [_candle(100, 120, 100, 118), _candle(118, 118, 105, 106)]
+    reason, price = simulate_trade(candles, entry=100, stop_loss=90, take_profit=None,
+                                   trailing_pct=0.10)
+    assert reason == "sl" and price == 108  # 120*(1-0.10), a profitable exit
+
+
+def test_trailing_does_not_stop_same_candle_as_new_high():
+    # Single candle with a high but low above the trailed stop → survives.
+    candles = [_candle(100, 120, 109, 115)]
+    reason, price = simulate_trade(candles, entry=100, stop_loss=90, take_profit=None,
+                                   trailing_pct=0.10)
+    assert reason == "end"  # low 109 > trailed stop 108, computed only for next bar
+
+
 # ------------------------------------------------------------------ Backtester
 class _FakeSource:
     def __init__(self, series: dict[str, list]):

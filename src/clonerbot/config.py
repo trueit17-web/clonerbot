@@ -135,6 +135,12 @@ class Settings(BaseSettings):
     # --- Time-based exit ---
     max_hold_minutes: int = 0            # 0 = disabled; else close a position after N min
 
+    # --- Signal-level overrides (0 = follow the signal's own SL/TP) ---
+    # When > 0, compute SL/TP from entry instead of trusting the signal. Handy
+    # after `clonerbot optimize` suggests better fixed levels.
+    stop_loss_override_pct: float = 0.0
+    take_profit_override_pct: float = 0.0
+
     # ------------------------------------------------------------------
     # Parsers for comma-separated / JSON env values
     # ------------------------------------------------------------------
@@ -187,7 +193,8 @@ class Settings(BaseSettings):
         if self.demote_winrate >= self.promote_min_winrate:
             raise ValueError("demote_winrate must be below promote_min_winrate")
         # These may be 0 (feature disabled), so they allow [0, 1).
-        for name in ("trailing_stop_pct", "paper_slippage"):
+        for name in ("trailing_stop_pct", "paper_slippage",
+                     "stop_loss_override_pct", "take_profit_override_pct"):
             val = getattr(self, name)
             if not (0 <= val < 1):
                 raise ValueError(f"{name} must be a fraction in [0, 1), got {val}")

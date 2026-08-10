@@ -122,13 +122,17 @@ class RiskEngine:
         if state.open_count >= s.max_open_positions:
             return reject(f"max open positions ({s.max_open_positions})")
 
-        # 6) Entry & stop resolution
+        # 6) Entry & stop resolution. Precedence: explicit override → signal's
+        #    own stop → configured default. Overrides come from `optimize`.
         entry = signal.reference_entry() or market_price
         if entry <= 0:
             return reject("no usable entry price")
-        stop = signal.stop_loss
-        if stop is None:
-            stop = entry * (1 - s.default_stop_loss)  # apply configured default
+        if s.stop_loss_override_pct > 0:
+            stop = entry * (1 - s.stop_loss_override_pct)
+        elif signal.stop_loss is not None:
+            stop = signal.stop_loss
+        else:
+            stop = entry * (1 - s.default_stop_loss)
         if stop <= 0 or stop >= entry:
             return reject("invalid stop-loss (must be > 0 and below entry for spot buy)")
 
@@ -157,7 +161,10 @@ class RiskEngine:
         if qty <= 0 or notional <= 0:
             return reject("computed qty <= 0")
 
-        tp = signal.take_profits[0] if signal.take_profits else None
+        if s.take_profit_override_pct > 0:
+            tp = entry * (1 + s.take_profit_override_pct)
+        else:
+            tp = signal.take_profits[0] if signal.take_profits else None
 
         plan = TradePlan(
             approved=True,

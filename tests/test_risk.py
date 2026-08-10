@@ -141,3 +141,13 @@ async def test_position_capped_by_tradable(engine):
 async def test_reject_when_no_tradable(engine):
     plan = await engine.evaluate(_signal(), _state(tradable=0.0), market_price=60000)
     assert not plan.approved and "funds" in plan.reason
+
+
+async def test_stop_and_tp_overrides_applied():
+    s = _settings(stop_loss_override_pct=0.02, take_profit_override_pct=0.05)
+    eng = RiskEngine(s, ChannelScorer())
+    # Signal says stop 58800 / tp 66000, but overrides should win: entry 60000.
+    plan = await eng.evaluate(_signal(), _state(), market_price=60000)
+    assert plan.approved
+    assert plan.stop_loss == pytest.approx(60000 * 0.98)   # 2% override
+    assert plan.take_profit == pytest.approx(60000 * 1.05)  # 5% override

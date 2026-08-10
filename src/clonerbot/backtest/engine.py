@@ -50,25 +50,33 @@ def simulate_trade(
     stop_loss: float,
     take_profit: float | None,
     max_hold_bars: int = 0,
+    trailing_pct: float = 0.0,
 ) -> tuple[str, float]:
     """Walk candles after entry and return (reason, exit_price).
 
     Conservative when a single candle spans both stop and target: assume the
-    stop is hit first. `max_hold_bars` (0 = unlimited) closes at that bar's
-    close. If candles run out, close at the last close.
+    stop is hit first. With `trailing_pct` the stop ratchets up to
+    high_water*(1-trailing_pct) using highs from PRIOR candles (so it can't
+    trail up and stop out within the same candle). `max_hold_bars` (0 =
+    unlimited) closes at that bar's close; if candles run out, close at last.
     """
     if not candles:
         return "no_data", entry
+    stop = stop_loss
+    high_water = entry
     last_close = entry
     for i, c in enumerate(candles):
         _, _o, high, low, close, *_ = c
         last_close = close
-        if low <= stop_loss:
-            return "sl", stop_loss
+        if low <= stop:
+            return "sl", stop
         if take_profit is not None and high >= take_profit:
             return "tp", take_profit
         if max_hold_bars and (i + 1) >= max_hold_bars:
             return "time", close
+        if trailing_pct > 0:
+            high_water = max(high_water, high)
+            stop = max(stop, high_water * (1 - trailing_pct))
     return "end", last_close
 
 

@@ -117,6 +117,12 @@ The Telethon session is persisted in `./sessions` so you log in once.
   `--exchange binance --timeframe 5m --bars 288 --max-hold-bars 0 --channel @x`.
   Uses public OHLCV (no keys); every signal is logged with its trade levels, so
   you can evaluate channels from history in minutes instead of weeks of paper.
+- `clonerbot optimize` — hyperopt-lite: fetches history once, then grid-searches
+  fixed risk parameters (stop %, take-profit %, trailing %, max-hold) over the
+  logged signals and prints the best combination as ready-to-paste `.env` values
+  (`STOP_LOSS_OVERRIDE_PCT`, `TAKE_PROFIT_OVERRIDE_PCT`, `TRAILING_STOP_PCT`,
+  `MAX_HOLD_MINUTES`). When the overrides are set, the live risk engine uses
+  those fixed levels instead of each signal's own. Validate in paper first.
 
 ## Autonomous learning (freqtrade-inspired)
 

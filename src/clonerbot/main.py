@@ -99,6 +99,64 @@ async def _backtest(args) -> None:
         print(f"{'TOTAL sum of returns':<44} {overall:>8.2%}")
 
 
+def _timeframe_minutes(tf: str) -> int:
+    units = {"m": 1, "h": 60, "d": 1440}
+    try:
+        return int(tf[:-1]) * units.get(tf[-1], 1)
+    except (ValueError, IndexError):
+        return 5
+
+
+async def _optimize(args) -> None:
+    """Grid-search fixed risk parameters over the backtest and suggest env vars."""
+    from clonerbot.backtest.history import CcxtHistory
+    from clonerbot.backtest.loader import load_signals
+    from clonerbot.backtest.optimize import Optimizer, default_grid, prefetch
+    from clonerbot.db import init_db
+
+    await init_db()
+    signals = await load_signals(channel=args.channel)
+    if not signals:
+        print("No replayable BUY signals found. Let the bot log some signals first.")
+        return
+    print(f"Loaded {len(signals)} signal(s). Fetching history once from {args.exchange} "
+          f"({args.timeframe})…")
+    src = CcxtHistory(args.exchange)
+    try:
+        cached = await prefetch(src, signals, args.timeframe, args.bars)
+    finally:
+        await src.close()
+    if not cached:
+        print("No historical data could be fetched for these signals.")
+        return
+
+    grid = default_grid()
+    print(f"Backtested {len(cached)} signals over {len(grid)} parameter combinations.\n")
+    results = Optimizer(cached, min_trades=args.min_trades).run(grid)
+
+    print(f"{'stop%':>6} {'tp%':>6} {'trail%':>7} {'hold':>5} "
+          f"{'trades':>6} {'winrate':>8} {'avg_ret':>9} {'sum_ret':>9}")
+    print("-" * 66)
+    for r in results[:10]:
+        c = r.combo
+        print(f"{c.stop_pct:>6.0%} {c.tp_pct:>6.0%} {c.trailing_pct:>7.0%} "
+              f"{c.max_hold_bars:>5} {r.trades:>6} {r.winrate:>7.0%} "
+              f"{r.avg_return:>8.2%} {r.sum_return:>8.2%}")
+
+    if results:
+        best = results[0].combo
+        tf_min = _timeframe_minutes(args.timeframe)
+        print("\n✅ Best combination — set these in .env to apply live:")
+        print(f"  CLONERBOT_STOP_LOSS_OVERRIDE_PCT={best.stop_pct}")
+        print(f"  CLONERBOT_TAKE_PROFIT_OVERRIDE_PCT={best.tp_pct}"
+              + ("   # 0 = keep signal's own TP" if best.tp_pct == 0 else ""))
+        print(f"  CLONERBOT_TRAILING_STOP_PCT={best.trailing_pct}")
+        print(f"  CLONERBOT_MAX_HOLD_MINUTES={best.max_hold_bars * tf_min}"
+              + ("   # 0 = no time limit" if best.max_hold_bars == 0 else
+                 f"   # {best.max_hold_bars} bars × {tf_min}m"))
+        print("\n⚠️ Optimized on past data — validate in paper before going live.")
+
+
 async def _stats() -> None:
     from clonerbot.db import init_db
     from clonerbot.scoring.channel_scorer import ChannelScorer
@@ -118,8 +176,8 @@ async def _stats() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="clonerbot", description="Autonomous copy-trading bot")
     parser.add_argument(
-        "command", choices=["run", "login", "check", "stats", "backtest"], nargs="?",
-        default="run",
+        "command", choices=["run", "login", "check", "stats", "backtest", "optimize"],
+        nargs="?", default="run",
     )
     parser.add_argument("--json-logs", action="store_true", help="emit JSON logs")
     parser.add_argument("--log-level", default="INFO")
@@ -132,6 +190,8 @@ def main() -> None:
     parser.add_argument("--max-hold-bars", type=int, default=0,
                         help="close after N bars, 0=unlimited (backtest)")
     parser.add_argument("--channel", default=None, help="restrict to one channel (backtest/stats)")
+    parser.add_argument("--min-trades", type=int, default=10,
+                        help="min trades for a combo to qualify (optimize)")
     args = parser.parse_args()
 
     configure_logging(json_logs=args.json_logs, level=args.log_level)
@@ -147,6 +207,8 @@ def main() -> None:
             asyncio.run(_stats())
         elif args.command == "backtest":
             asyncio.run(_backtest(args))
+        elif args.command == "optimize":
+            asyncio.run(_optimize(args))
     except KeyboardInterrupt:
         print("\ninterrupted", file=sys.stderr)
 
