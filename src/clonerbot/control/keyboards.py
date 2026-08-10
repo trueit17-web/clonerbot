@@ -43,7 +43,7 @@ CB_MODE_LIVE_YES = "mode:live:yes"
 CB_MODE_NO = "mode:no"
 
 # Common spot exchanges offered when adding one via the bot.
-KNOWN_EXCHANGES = ["bybit", "binance", "okx", "bitget", "kucoin", "gate", "mexc", "kraken"]
+KNOWN_EXCHANGES = ["bybit", "binance", "bitunix", "okx", "bitget", "kucoin", "gate", "mexc"]
 
 
 def build_main_menu(discovery_enabled: bool) -> ReplyKeyboardMarkup:

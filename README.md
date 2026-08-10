@@ -133,6 +133,17 @@ The Telethon session is persisted in `./sessions` so you log in once.
   `MAX_HOLD_MINUTES`). When the overrides are set, the live risk engine uses
   those fixed levels instead of each signal's own. Validate in paper first.
 
+## Exchanges
+
+Most exchanges are reached through **CCXT**. **Bitunix** is not in CCXT, so it
+has a **native adapter** (`exchange/bitunix.py`) implementing the official
+Bitunix USDT-M futures OpenAPI (base `fapi.bitunix.com`, double-SHA256 signing,
+`place_order` / `change_leverage` / `account` / `tickers`). Add it like any
+other exchange — via `⚙️ Настройки → ➕ Добавить биржу` (pick **Bitunix**) or in
+`.env`: `CLONERBOT_EXCHANGES={"bitunix":{"apiKey":"...","secret":"..."}}`. Give
+the key **futures trade permission**; withdrawals stay off. If Bitunix rejects
+order quantities as too precise, lower `BITUNIX_QTY_DECIMALS`.
+
 ## Autonomous learning (freqtrade-inspired)
 
 Ideas ported from [freqtrade](https://github.com/freqtrade/freqtrade), adapted to

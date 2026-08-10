@@ -17,14 +17,23 @@ from clonerbot.logging_conf import get_logger
 log = get_logger("router")
 
 
+def build_client(exchange_id: str, creds: dict, default_type: str, settings: Settings):
+    """Create the right client for an exchange (native Bitunix, else CCXT)."""
+    if exchange_id.strip().lower() == "bitunix":
+        from clonerbot.exchange.bitunix import BitunixClient
+
+        return BitunixClient(exchange_id, creds, default_type, settings.bitunix_qty_decimals)
+    return CcxtClient(exchange_id, creds, default_type)
+
+
 class ExchangeRouter:
     def __init__(self, settings: Settings) -> None:
         self._s = settings
         # CCXT market type: "swap" (perpetual futures) or "spot".
         self._default_type = "swap" if settings.market.value == "futures" else "spot"
-        self._clients: dict[str, CcxtClient] = {}
+        self._clients: dict = {}
         for ex_id, creds in settings.exchanges.items():
-            self._clients[ex_id] = CcxtClient(ex_id, creds, self._default_type)
+            self._clients[ex_id] = build_client(ex_id, creds, self._default_type, settings)
 
     @property
     def clients(self) -> dict[str, CcxtClient]:
@@ -37,7 +46,8 @@ class ExchangeRouter:
     def add_client(self, exchange_id: str, creds: dict) -> None:
         """Add or replace a client at runtime (e.g. keys added via the bot)."""
         exchange_id = exchange_id.strip().lower()
-        self._clients[exchange_id] = CcxtClient(exchange_id, creds, self._default_type)
+        self._clients[exchange_id] = build_client(
+            exchange_id, creds, self._default_type, self._s)
         log.info("router.add_client", exchange=exchange_id)
 
     async def remove_client(self, exchange_id: str) -> bool:

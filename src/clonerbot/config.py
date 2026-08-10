@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # Keep the stop inside the liquidation price: the chosen leverage is reduced
     # so that stop_distance <= liquidation_safety / leverage. 0.8 = comfortable.
     liquidation_safety: float = 0.8
+    # Bitunix (native adapter, not CCXT): order-quantity decimal places. Bitunix
+    # rejects over-precise quantities; lower this if you get precision errors.
+    bitunix_qty_decimals: int = 3
     # Virtual starting equity (quote currency) for paper mode.
     paper_start_equity: float = 10_000.0
     # How often (seconds) the executor polls open positions for SL/TP.
