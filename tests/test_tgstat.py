@@ -8,7 +8,7 @@ from clonerbot.discovery.tgstat import TgstatSource
 async def test_extracts_usernames(monkeypatch):
     html = """
     <a href="https://t.me/great_signals">Great Signals</a>
-    <a href="https://tgstat.ru/en/channel/@whale_alerts/stat">Whales</a>
+    <a href="https://tgstat.com/en/channel/@whale_alerts/stat">Whales</a>
     <a href="https://t.me/joinchat/AAAA">invite</a>       <!-- reserved, skip -->
     <a href="https://t.me/great_signals">dup</a>           <!-- duplicate, skip -->
     <a href="https://t.me/share/url?u=x">share</a>         <!-- reserved, skip -->

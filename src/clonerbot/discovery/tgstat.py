@@ -1,8 +1,8 @@
-"""Best-effort tgstat.ru discovery source.
+"""Best-effort tgstat.com discovery source.
 
-tgstat.ru is a public Telegram-channel catalog. It has no free structured API,
+tgstat.com is a public Telegram-channel catalog. It has no free structured API,
 so this scrapes its search pages and extracts channel usernames from the HTML
-(t.me/<name> and tgstat.ru/channel/@<name> links). It is intentionally
+(t.me/<name> and tgstat.com/channel/@<name> links). It is intentionally
 defensive: any network/parse failure returns an empty list rather than raising,
 because discovery is a nice-to-have and must never take the bot down.
 
@@ -28,9 +28,9 @@ _UA = (
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 
-# Usernames from t.me/<name> or tgstat.ru/channel/@<name> (also /en/channel/...).
+# Usernames from t.me/<name> or tgstat.(com|ru)/channel/@<name> (also /en/...).
 _USERNAME_RE = re.compile(
-    r"(?:t\.me/|tgstat\.ru/(?:[a-z]{2}/)?channel/@)([A-Za-z][A-Za-z0-9_]{3,31})"
+    r"(?:t\.me/|tgstat\.(?:com|ru)/(?:[a-z]{2}/)?channel/@)([A-Za-z][A-Za-z0-9_]{3,31})"
 )
 # Telegram reserved / non-channel paths to ignore.
 _RESERVED = {
@@ -40,7 +40,7 @@ _RESERVED = {
 
 
 class TgstatSource:
-    def __init__(self, base: str = "https://tgstat.ru") -> None:
+    def __init__(self, base: str = "https://tgstat.com") -> None:
         self._base = base
 
     async def search(self, keyword: str, limit: int = 20) -> list[str]:
