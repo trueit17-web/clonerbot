@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from clonerbot.config import Settings
+from clonerbot.config import Market, Settings
 from clonerbot.logging_conf import get_logger
 from clonerbot.models.signal import NormalizedSignal, Side
 from clonerbot.scoring.channel_scorer import ChannelScorer
@@ -61,6 +61,7 @@ class TradePlan:
     stop_loss: float = 0.0
     take_profit: float | None = None
     channel_multiplier: float = 1.0
+    leverage: float = 1.0
 
 
 class RiskEngine:
@@ -94,10 +95,11 @@ class RiskEngine:
             if locked:
                 return reject(f"locked: {locked}")
 
-        # 1) Spot semantics: we only open with buys. Sells are handled as
-        #    close-signals elsewhere, not as new positions here.
-        if signal.side is Side.sell:
-            return reject("spot MVP: sell signal is not a new position")
+        # 1) Direction. Spot only opens with buys; futures allows long & short.
+        futures = s.market is Market.futures
+        if not futures and signal.side is Side.sell:
+            return reject("spot: sell signal is not a new position")
+        is_long = signal.is_long
 
         # 2) Whitelist
         if s.symbol_whitelist and signal.base not in s.symbol_whitelist:
@@ -122,69 +124,74 @@ class RiskEngine:
         if state.open_count >= s.max_open_positions:
             return reject(f"max open positions ({s.max_open_positions})")
 
-        # 6) Entry & stop resolution. Precedence: explicit override → signal's
-        #    own stop → configured default. Overrides come from `optimize`.
+        # 6) Entry & stop resolution, direction-aware. Precedence for the stop:
+        #    override → signal's own → configured default (mirrored for shorts).
         entry = signal.reference_entry() or market_price
         if entry <= 0:
             return reject("no usable entry price")
         if s.stop_loss_override_pct > 0:
-            stop = entry * (1 - s.stop_loss_override_pct)
+            d = s.stop_loss_override_pct
+            stop = entry * (1 - d) if is_long else entry * (1 + d)
         elif signal.stop_loss is not None:
             stop = signal.stop_loss
         else:
-            stop = entry * (1 - s.default_stop_loss)
-        if stop <= 0 or stop >= entry:
-            return reject("invalid stop-loss (must be > 0 and below entry for spot buy)")
+            d = s.default_stop_loss
+            stop = entry * (1 - d) if is_long else entry * (1 + d)
+        if stop <= 0:
+            return reject("invalid stop-loss")
+        if is_long and stop >= entry:
+            return reject("long stop must be below entry")
+        if not is_long and stop <= entry:
+            return reject("short stop must be above entry")
 
-        stop_distance = (entry - stop) / entry
+        stop_distance = abs(entry - stop) / entry
         if stop_distance < 1e-4:
             return reject("stop too tight")
 
-        # 7) Sizing — multiplier is learned from the channel's track record
-        #    (Edge-style expectancy). A non-positive multiplier means the channel
-        #    has proven unprofitable → skip it.
+        # 7) Learned multiplier (Edge expectancy); non-positive → skip channel.
         mult = await self._scorer.multiplier(signal.channel)
         if mult <= 0:
             return reject("channel expectancy non-positive")
-        risk_amount = state.equity * s.risk_per_trade * mult
-        qty = risk_amount / (entry * stop_distance)
-
-        # The position may never cost more than what is actually free to trade
-        # right now (spot base-quote), nor more than the per-position fraction.
         if state.tradable <= 0:
             return reject("no funds available to trade")
+
+        # Leverage (futures only), reduced so the stop sits inside liquidation:
+        # stop_distance <= liquidation_safety / leverage.
+        leverage = 1.0
+        if futures:
+            requested = signal.leverage or s.default_leverage
+            liq_cap = (int(s.liquidation_safety / stop_distance)
+                       if stop_distance > 0 else s.max_leverage)
+            leverage = float(max(1, min(int(requested), s.max_leverage, max(1, liq_cap))))
+
+        # Risk-based qty: the loss if the stop is hit ≈ risk_per_trade of equity,
+        # independent of leverage. Leverage only reduces the margin required.
+        risk_amount = state.equity * s.risk_per_trade * mult
+        qty = risk_amount / (entry * stop_distance)
         notional = qty * entry
+        margin = notional / leverage
         cap = min(state.equity * s.max_position_fraction, state.tradable)
-        if notional > cap:
-            qty = cap / entry
-            notional = cap
+        if margin > cap:
+            margin = cap
+            notional = cap * leverage
+            qty = notional / entry
         if qty <= 0 or notional <= 0:
             return reject("computed qty <= 0")
 
         if s.take_profit_override_pct > 0:
-            tp = entry * (1 + s.take_profit_override_pct)
+            d = s.take_profit_override_pct
+            tp = entry * (1 + d) if is_long else entry * (1 - d)
         else:
             tp = signal.take_profits[0] if signal.take_profits else None
 
         plan = TradePlan(
-            approved=True,
-            reason="approved",
-            symbol=signal.symbol,
-            side=Side.buy,
-            qty=qty,
-            entry_price=entry,
-            stop_loss=stop,
-            take_profit=tp,
-            channel_multiplier=mult,
+            approved=True, reason="approved", symbol=signal.symbol, side=signal.side,
+            qty=qty, entry_price=entry, stop_loss=stop, take_profit=tp,
+            channel_multiplier=mult, leverage=leverage,
         )
         log.info(
-            "risk.approved",
-            symbol=plan.symbol,
-            qty=round(qty, 8),
-            notional=round(notional, 2),
-            entry=entry,
-            stop=round(stop, 8),
-            tp=tp,
-            channel_mult=mult,
+            "risk.approved", symbol=plan.symbol, side=signal.side.value, qty=round(qty, 8),
+            notional=round(notional, 2), margin=round(margin, 2), leverage=leverage,
+            entry=entry, stop=round(stop, 8), tp=tp, channel_mult=mult,
         )
         return plan

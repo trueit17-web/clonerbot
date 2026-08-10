@@ -23,6 +23,7 @@ class Mode(str, Enum):
 
 class Market(str, Enum):
     spot = "spot"
+    futures = "futures"
 
 
 class Settings(BaseSettings):
@@ -36,6 +37,13 @@ class Settings(BaseSettings):
     # --- Mode ---
     mode: Mode = Mode.paper
     market: Market = Market.spot
+    # --- Futures ---
+    # Default leverage when a signal doesn't specify one; capped by max_leverage.
+    default_leverage: int = 3
+    max_leverage: int = 20
+    # Keep the stop inside the liquidation price: the chosen leverage is reduced
+    # so that stop_distance <= liquidation_safety / leverage. 0.8 = comfortable.
+    liquidation_safety: float = 0.8
     # Virtual starting equity (quote currency) for paper mode.
     paper_start_equity: float = 10_000.0
     # How often (seconds) the executor polls open positions for SL/TP.
@@ -186,10 +194,15 @@ class Settings(BaseSettings):
             "default_stop_loss",
             "promote_min_winrate",
             "demote_winrate",
+            "liquidation_safety",
         ):
             val = getattr(self, name)
             if not (0 < val <= 1):
                 raise ValueError(f"{name} must be a fraction in (0, 1], got {val}")
+        if self.default_leverage < 1 or self.max_leverage < 1:
+            raise ValueError("leverage must be >= 1")
+        if self.default_leverage > self.max_leverage:
+            raise ValueError("default_leverage cannot exceed max_leverage")
         if self.demote_winrate >= self.promote_min_winrate:
             raise ValueError("demote_winrate must be below promote_min_winrate")
         # These may be 0 (feature disabled), so they allow [0, 1).

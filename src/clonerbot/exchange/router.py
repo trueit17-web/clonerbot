@@ -20,9 +20,11 @@ log = get_logger("router")
 class ExchangeRouter:
     def __init__(self, settings: Settings) -> None:
         self._s = settings
+        # CCXT market type: "swap" (perpetual futures) or "spot".
+        self._default_type = "swap" if settings.market.value == "futures" else "spot"
         self._clients: dict[str, CcxtClient] = {}
         for ex_id, creds in settings.exchanges.items():
-            self._clients[ex_id] = CcxtClient(ex_id, creds)
+            self._clients[ex_id] = CcxtClient(ex_id, creds, self._default_type)
 
     @property
     def clients(self) -> dict[str, CcxtClient]:
@@ -35,7 +37,7 @@ class ExchangeRouter:
     def add_client(self, exchange_id: str, creds: dict) -> None:
         """Add or replace a client at runtime (e.g. keys added via the bot)."""
         exchange_id = exchange_id.strip().lower()
-        self._clients[exchange_id] = CcxtClient(exchange_id, creds)
+        self._clients[exchange_id] = CcxtClient(exchange_id, creds, self._default_type)
         log.info("router.add_client", exchange=exchange_id)
 
     async def remove_client(self, exchange_id: str) -> bool:

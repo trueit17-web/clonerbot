@@ -41,9 +41,16 @@ class OpenPos:
     entry_price: float
     stop_loss: float
     take_profit: float | None
-    cost: float  # cash spent incl. fees (paper) / notional (live)
-    high_water: float = 0.0  # highest mark seen, for the trailing stop
+    cost: float  # margin (futures) / cash spent incl. fees (spot)
+    side: str = "buy"  # "buy" = long, "sell" = short (futures)
+    leverage: float = 1.0
+    open_fee: float = 0.0  # futures: fee paid on entry (for realized-PnL netting)
+    high_water: float = 0.0  # extreme mark seen, for the trailing stop
     opened_at: datetime | None = None  # for the max-hold time exit
+
+    @property
+    def is_long(self) -> bool:
+        return self.side == "buy"
 
 
 @dataclass
@@ -91,6 +98,11 @@ class Executor:
     @property
     def is_paper(self) -> bool:
         return self.force_paper or not self.settings.is_live
+
+    @property
+    def is_futures(self) -> bool:
+        from clonerbot.config import Market
+        return self.settings.market is Market.futures
 
     @property
     def _tag(self) -> str:
@@ -162,35 +174,38 @@ class Executor:
         quote = plan.symbol.split("/")[1]
         exchange_id = "paper"
         fill_price = plan.entry_price
+        side = plan.side.value  # "buy"=long, "sell"=short
+        leverage = plan.leverage if self.is_futures else 1.0
+        open_fee = 0.0
 
         if self.is_paper:
             mark = await self._mark(plan.symbol, plan.entry_price)
             qty = plan.qty
-            fill_price, cost = self.paper.buy(qty, mark)
+            if self.is_futures:
+                fill_price, cost, open_fee = self.paper.futures_open(side, qty, mark, leverage)
+            else:
+                fill_price, cost = self.paper.buy(qty, mark)
         else:
             client = await self.router.pick(plan.symbol, quote)
             if client is None:
                 log.warning("executor.no_exchange", symbol=plan.symbol)
                 return None
             qty = await client.amount_to_precision(plan.symbol, plan.qty)
-            order = await client.create_market_buy(plan.symbol, qty)
+            if self.is_futures:
+                await client.set_leverage(plan.symbol, leverage)
+            order = (await client.create_market_buy(plan.symbol, qty) if side == "buy"
+                     else await client.create_market_sell(plan.symbol, qty))
             fill_price = float(order.get("average") or order.get("price") or plan.entry_price)
             qty = float(order.get("filled") or qty)
-            cost = qty * fill_price
+            cost = qty * fill_price / leverage
             exchange_id = client.exchange_id
 
         async with session_scope() as s:
             row = Position(
-                exchange=exchange_id,
-                symbol=plan.symbol,
-                channel=channel,
-                signal_id=signal_id,
-                is_paper=self.is_paper,
-                status="open",
-                qty=qty,
-                entry_price=fill_price,
-                stop_loss=plan.stop_loss,
-                take_profit=plan.take_profit,
+                exchange=exchange_id, symbol=plan.symbol, channel=channel, signal_id=signal_id,
+                is_paper=self.is_paper, status="open", qty=qty, entry_price=fill_price,
+                stop_loss=plan.stop_loss, take_profit=plan.take_profit,
+                side=side, leverage=leverage,
             )
             s.add(row)
             await s.flush()
@@ -199,17 +214,19 @@ class Executor:
         pos = OpenPos(
             id=pos_id, exchange=exchange_id, symbol=plan.symbol, channel=channel,
             qty=qty, entry_price=fill_price, stop_loss=plan.stop_loss,
-            take_profit=plan.take_profit, cost=cost, high_water=fill_price,
-            opened_at=datetime.now(timezone.utc),
+            take_profit=plan.take_profit, cost=cost, side=side, leverage=leverage,
+            open_fee=open_fee, high_water=fill_price, opened_at=datetime.now(timezone.utc),
         )
         self.open_positions[plan.symbol] = pos
+        dir_ru = "LONG 🟢" if side == "buy" else "SHORT 🔴"
+        lev_txt = f" · {leverage:g}x" if self.is_futures else ""
         log.info(
             "executor.opened", id=pos_id, mode="paper" if self.is_paper else "live",
-            symbol=plan.symbol, qty=round(qty, 8), entry=fill_price,
-            stop=plan.stop_loss, tp=plan.take_profit,
+            symbol=plan.symbol, side=side, leverage=leverage, qty=round(qty, 8),
+            entry=fill_price, stop=plan.stop_loss, tp=plan.take_profit,
         )
         await self._notify(
-            f"{self._tag} · <b>Открыта</b> {plan.symbol}\n"
+            f"{self._tag} · <b>Открыта</b> {dir_ru}{lev_txt} {plan.symbol}\n"
             f"📡 {channel}\n"
             f"вход {fill_price:g} · объём {qty:g} (~{qty * fill_price:,.2f} {quote})\n"
             f"🛑 стоп {plan.stop_loss:g} · 🎯 тейк {plan.take_profit if plan.take_profit else '—'}"
@@ -224,14 +241,29 @@ class Executor:
         exit_price = await self._mark(symbol, pos.entry_price)
 
         if self.is_paper:
-            exit_price, proceeds = self.paper.sell(pos.qty, exit_price)
-            pnl = proceeds - pos.cost
+            if self.is_futures:
+                exit_price, pnl = self.paper.futures_close(
+                    pos.side, pos.qty, pos.entry_price, exit_price, pos.cost, pos.open_fee
+                )
+            else:
+                exit_price, proceeds = self.paper.sell(pos.qty, exit_price)
+                pnl = proceeds - pos.cost
         else:
             client = self.router.clients.get(pos.exchange)
             if client is not None:
-                order = await client.create_market_sell(symbol, pos.qty)
+                # Close with the opposite side (reduceOnly on futures).
+                if pos.side == "buy":
+                    order = await client.create_market_sell(
+                        symbol, pos.qty, reduce_only=self.is_futures)
+                else:
+                    order = await client.create_market_buy(
+                        symbol, pos.qty, reduce_only=self.is_futures)
                 exit_price = float(order.get("average") or order.get("price") or exit_price)
-            pnl = pos.qty * (exit_price - pos.entry_price)
+            # Long profits when price rises; short profits when it falls.
+            if pos.side == "buy":
+                pnl = pos.qty * (exit_price - pos.entry_price)
+            else:
+                pnl = pos.qty * (pos.entry_price - exit_price)
 
         self._realized_today += pnl
 
@@ -302,9 +334,17 @@ class Executor:
             if price is None:
                 continue
             await self._apply_trailing(pos, price)
-            if price <= pos.stop_loss:
+            # Direction-aware exits: a long stops below / targets above; a short
+            # (futures) is the mirror image.
+            if pos.is_long:
+                hit_sl = price <= pos.stop_loss
+                hit_tp = pos.take_profit is not None and price >= pos.take_profit
+            else:
+                hit_sl = price >= pos.stop_loss
+                hit_tp = pos.take_profit is not None and price <= pos.take_profit
+            if hit_sl:
                 await self.close_position(symbol, "sl")
-            elif pos.take_profit is not None and price >= pos.take_profit:
+            elif hit_tp:
                 await self.close_position(symbol, "tp")
             elif self._max_hold_exceeded(pos):
                 await self.close_position(symbol, "time")
@@ -317,27 +357,33 @@ class Executor:
         return age_min >= limit
 
     async def _apply_trailing(self, pos: OpenPos, price: float) -> None:
-        """Ratchet the stop upward as price makes new highs (never downward).
+        """Ratchet the stop toward price as the trade moves in our favor.
 
-        With trailing_stop_pct = t, once price sets a new high H the stop is
-        raised to H*(1-t) if that is above the current stop. This locks in gains
-        while letting winners run; it can only tighten, never loosen.
+        Long: stop rises to high*(1-t) on new highs. Short (futures): stop falls
+        to low*(1+t) on new lows. It can only tighten, never loosen.
         """
         t = self.settings.trailing_stop_pct
         if t <= 0:
             return
-        if price > pos.high_water:
-            pos.high_water = price
-            new_stop = price * (1 - t)
-            if new_stop > pos.stop_loss:
-                old = pos.stop_loss
-                pos.stop_loss = new_stop
-                log.info(
-                    "executor.trail", symbol=pos.symbol, price=price,
-                    old_stop=round(old, 8), new_stop=round(new_stop, 8),
-                )
-                # Persist so a restart recovers the tightened stop.
-                await self._persist_stop(pos.id, new_stop)
+        if pos.is_long:
+            if price > pos.high_water:
+                pos.high_water = price
+                new_stop = price * (1 - t)
+                if new_stop > pos.stop_loss:
+                    pos.stop_loss = new_stop
+                    log.info("executor.trail", symbol=pos.symbol, price=price,
+                             new_stop=round(new_stop, 8))
+                    await self._persist_stop(pos.id, new_stop)
+        else:
+            # high_water tracks the LOWEST mark for a short.
+            if pos.high_water == 0 or price < pos.high_water:
+                pos.high_water = price
+                new_stop = price * (1 + t)
+                if new_stop < pos.stop_loss:
+                    pos.stop_loss = new_stop
+                    log.info("executor.trail", symbol=pos.symbol, price=price,
+                             new_stop=round(new_stop, 8))
+                    await self._persist_stop(pos.id, new_stop)
 
     async def _persist_stop(self, pos_id: int, stop: float) -> None:
         try:
@@ -368,10 +414,12 @@ class Executor:
                 )
             ).scalars().all()
         for row in rows:
+            lev = row.leverage or 1.0
             self.open_positions[row.symbol] = OpenPos(
                 id=row.id, exchange=row.exchange, symbol=row.symbol, channel=row.channel,
                 qty=row.qty, entry_price=row.entry_price, stop_loss=row.stop_loss or 0.0,
-                take_profit=row.take_profit, cost=row.qty * row.entry_price,
+                take_profit=row.take_profit, cost=row.qty * row.entry_price / lev,
+                side=row.side or "buy", leverage=lev, open_fee=0.0,
                 high_water=row.entry_price, opened_at=row.opened_at,
             )
         if rows:

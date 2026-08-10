@@ -28,9 +28,11 @@ class ExchangeStatus:
 
 
 class CcxtClient:
-    def __init__(self, exchange_id: str, credentials: dict[str, Any]) -> None:
+    def __init__(self, exchange_id: str, credentials: dict[str, Any],
+                 default_type: str = "spot") -> None:
         self.exchange_id = exchange_id
         self._creds = credentials
+        self._default_type = default_type  # "spot" or "swap"/"future" for futures
         self._ex = None
 
     def _get(self):
@@ -43,9 +45,15 @@ class CcxtClient:
             params = dict(self._creds)
             params.setdefault("enableRateLimit", True)
             params.setdefault("options", {})
-            params["options"].setdefault("defaultType", "spot")
+            params["options"].setdefault("defaultType", self._default_type)
             self._ex = klass(params)
         return self._ex
+
+    async def set_leverage(self, symbol: str, leverage: float) -> None:
+        try:
+            await self._get().set_leverage(int(leverage), symbol)
+        except Exception as exc:
+            log.warning("ccxt.set_leverage_failed", exchange=self.exchange_id, error=str(exc))
 
     async def load_markets(self) -> None:
         await self._get().load_markets()
@@ -62,11 +70,13 @@ class CcxtClient:
         free = bal.get("free", {}) or {}
         return float(free.get(quote, 0.0) or 0.0)
 
-    async def create_market_buy(self, symbol: str, qty: float) -> dict:
-        return await self._get().create_order(symbol, "market", "buy", qty)
+    async def create_market_buy(self, symbol: str, qty: float, reduce_only: bool = False) -> dict:
+        params = {"reduceOnly": True} if reduce_only else {}
+        return await self._get().create_order(symbol, "market", "buy", qty, None, params)
 
-    async def create_market_sell(self, symbol: str, qty: float) -> dict:
-        return await self._get().create_order(symbol, "market", "sell", qty)
+    async def create_market_sell(self, symbol: str, qty: float, reduce_only: bool = False) -> dict:
+        params = {"reduceOnly": True} if reduce_only else {}
+        return await self._get().create_order(symbol, "market", "sell", qty, None, params)
 
     async def amount_to_precision(self, symbol: str, qty: float) -> float:
         try:

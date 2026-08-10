@@ -2,9 +2,18 @@
 
 Autonomous crypto **copy-trading bot**. It reads trade signals from Telegram
 channels, normalizes them into a structured format, applies a strict risk
-envelope, and executes **spot** trades across one or more exchanges. It runs in
-**paper mode by default** — live trading is a single explicit flag you flip only
-after you've reviewed paper-trading statistics.
+envelope, and executes trades across one or more exchanges. It supports
+**futures** (long + short, leverage) and **spot** (long-only), selected with
+`CLONERBOT_MARKET`. It runs in **paper mode by default** — live trading is a
+single explicit flag you flip only after you've reviewed paper-trading stats.
+
+**Futures.** Long/short come straight from each signal's direction. Leverage is
+taken from the signal (or `DEFAULT_LEVERAGE`), capped by `MAX_LEVERAGE`, and
+automatically **reduced so the stop-loss sits inside the liquidation price**
+(`LIQUIDATION_SAFETY`). Position size is risk-based — the loss if the stop is
+hit is ~`RISK_PER_TRADE` of equity **regardless of leverage**; leverage only
+lowers the margin required. Stops/targets/trailing are mirrored for shorts, and
+positions close with reduce-only orders.
 
 > ⚠️ **Financial risk.** Autonomous trading on third-party Telegram signals can
 > lose your entire deposit. Telegram signals are noisy and often low-quality or

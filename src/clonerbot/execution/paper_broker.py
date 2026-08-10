@@ -52,3 +52,34 @@ class PaperBroker:
             proceeds=round(net, 2), cash=round(self.cash, 2),
         )
         return fill, net
+
+    # ------------------------------------------------------------------ futures
+    def futures_open(self, side: str, qty: float, mark: float,
+                     leverage: float) -> tuple[float, float, float]:
+        """Open a leveraged position. Returns (fill_price, margin, open_fee).
+
+        Adverse slippage: a long fills a bit higher, a short a bit lower.
+        Only the margin (notional/leverage) plus fee leaves cash."""
+        fill = mark * (1 + self.slippage) if side == "buy" else mark * (1 - self.slippage)
+        notional = qty * fill
+        margin = notional / leverage
+        fee = notional * TAKER_FEE
+        self.cash -= margin + fee
+        log.info("paper.fut_open", side=side, qty=round(qty, 8), fill=round(fill, 8),
+                 margin=round(margin, 2), cash=round(self.cash, 2))
+        return fill, margin, fee
+
+    def futures_close(self, side: str, qty: float, entry: float, mark: float,
+                      margin: float, open_fee: float) -> tuple[float, float]:
+        """Close a leveraged position. Returns (exit_fill, realized_pnl).
+
+        realized_pnl is net of both fees; cash gets the margin back plus PnL."""
+        # Exit is the opposite action: long sells (lower), short buys (higher).
+        fill = mark * (1 - self.slippage) if side == "buy" else mark * (1 + self.slippage)
+        gross = qty * (fill - entry) if side == "buy" else qty * (entry - fill)
+        close_fee = qty * fill * TAKER_FEE
+        self.cash += margin + gross - close_fee
+        realized = gross - close_fee - open_fee
+        log.info("paper.fut_close", side=side, qty=round(qty, 8), fill=round(fill, 8),
+                 pnl=round(realized, 2), cash=round(self.cash, 2))
+        return fill, realized

@@ -77,6 +77,11 @@ class NormalizedSignal(BaseModel):
         return f"{self.base}/{self.quote}"
 
     @property
+    def is_long(self) -> bool:
+        """Futures direction: buy = long, sell = short."""
+        return self.side is Side.buy
+
+    @property
     def dedup_key(self) -> str:
         return f"{self.channel}:{self.message_id}"
 

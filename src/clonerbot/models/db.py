@@ -73,6 +73,9 @@ class Position(Base):
     entry_price: Mapped[float] = mapped_column(Float)
     stop_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
     take_profit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Futures: "buy" (long) or "sell" (short); leverage 1 for spot.
+    side: Mapped[str] = mapped_column(String(8), default="buy")
+    leverage: Mapped[float] = mapped_column(Float, default=1.0)
 
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
