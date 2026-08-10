@@ -112,6 +112,11 @@ The Telethon session is persisted in `./sessions` so you log in once.
 - `clonerbot run` — start the full pipeline.
 - `clonerbot stats` — print channel reputation and PnL.
 - `clonerbot check` — validate config and exchange connectivity, then exit.
+- `clonerbot backtest` — replay logged signals against historical prices and
+  rank channels by win rate / average return / total return. Options:
+  `--exchange binance --timeframe 5m --bars 288 --max-hold-bars 0 --channel @x`.
+  Uses public OHLCV (no keys); every signal is logged with its trade levels, so
+  you can evaluate channels from history in minutes instead of weeks of paper.
 
 ## Autonomous learning (freqtrade-inspired)
 

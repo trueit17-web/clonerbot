@@ -46,6 +46,11 @@ class SignalRecord(Base):
     parse_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     symbol: Mapped[str | None] = mapped_column(String(32), nullable=True)
     side: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # Structured trade levels (JSON list strings) so signals are replayable in
+    # backtests without re-parsing; nullable for old rows / quarantined signals.
+    entries: Mapped[str | None] = mapped_column(Text, nullable=True)
+    take_profits: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stop_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Decision outcome: parsed | quarantined | rejected | accepted | executed
     status: Mapped[str] = mapped_column(String(24), index=True, default="parsed")

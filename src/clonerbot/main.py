@@ -64,6 +64,41 @@ async def _check() -> None:
     print("check complete.")
 
 
+async def _backtest(args) -> None:
+    """Replay logged signals against historical prices and rank channels."""
+    from clonerbot.backtest.engine import Backtester
+    from clonerbot.backtest.history import CcxtHistory
+    from clonerbot.backtest.loader import load_signals
+    from clonerbot.db import init_db
+
+    settings = get_settings()
+    await init_db()
+    signals = await load_signals(channel=args.channel)
+    if not signals:
+        print("No replayable BUY signals found. Let the bot log some signals first.")
+        return
+    print(f"Loaded {len(signals)} signal(s). Fetching history from {args.exchange} "
+          f"({args.timeframe}, up to {args.bars} bars each)…")
+    src = CcxtHistory(args.exchange)
+    bt = Backtester(src, timeframe=args.timeframe, bars=args.bars,
+                    max_hold_bars=args.max_hold_bars, default_stop=settings.default_stop_loss)
+    try:
+        report = await bt.run(signals)
+    finally:
+        await src.close()
+
+    print(f"\nTrades simulated: {report.total_trades} · skipped (no data): {report.skipped}\n")
+    print(f"{'channel':<28} {'trades':>6} {'winrate':>8} {'avg_ret':>9} {'sum_ret':>9}")
+    print("-" * 64)
+    for cr in report.ranked():
+        print(f"{cr.channel:<28} {cr.trades:>6} {cr.winrate:>7.0%} "
+              f"{cr.avg_return:>8.2%} {cr.sum_return:>8.2%}")
+    if report.total_trades:
+        overall = sum(c.sum_return for c in report.per_channel.values())
+        print("-" * 64)
+        print(f"{'TOTAL sum of returns':<44} {overall:>8.2%}")
+
+
 async def _stats() -> None:
     from clonerbot.db import init_db
     from clonerbot.scoring.channel_scorer import ChannelScorer
@@ -83,10 +118,20 @@ async def _stats() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="clonerbot", description="Autonomous copy-trading bot")
     parser.add_argument(
-        "command", choices=["run", "login", "check", "stats"], nargs="?", default="run"
+        "command", choices=["run", "login", "check", "stats", "backtest"], nargs="?",
+        default="run",
     )
     parser.add_argument("--json-logs", action="store_true", help="emit JSON logs")
     parser.add_argument("--log-level", default="INFO")
+    # backtest options
+    parser.add_argument("--exchange", default="binance",
+                        help="exchange for historical OHLCV (backtest)")
+    parser.add_argument("--timeframe", default="5m", help="candle timeframe (backtest)")
+    parser.add_argument("--bars", type=int, default=288,
+                        help="max candles fetched per signal (backtest)")
+    parser.add_argument("--max-hold-bars", type=int, default=0,
+                        help="close after N bars, 0=unlimited (backtest)")
+    parser.add_argument("--channel", default=None, help="restrict to one channel (backtest/stats)")
     args = parser.parse_args()
 
     configure_logging(json_logs=args.json_logs, level=args.log_level)
@@ -100,6 +145,8 @@ def main() -> None:
             asyncio.run(_check())
         elif args.command == "stats":
             asyncio.run(_stats())
+        elif args.command == "backtest":
+            asyncio.run(_backtest(args))
     except KeyboardInterrupt:
         print("\ninterrupted", file=sys.stderr)
 

@@ -84,6 +84,8 @@ class Pipeline:
 
     # ------------------------------------------------------------------ audit
     async def _audit(self, msg: RawMessage, outcome: ParseOutcome, status: str) -> int:
+        import json
+
         sig = outcome.signal
         async with session_scope() as s:
             row = SignalRecord(
@@ -95,6 +97,9 @@ class Pipeline:
                 parse_confidence=sig.parse_confidence if sig else None,
                 symbol=sig.symbol if sig else None,
                 side=sig.side.value if sig else None,
+                entries=json.dumps(sig.entries) if sig else None,
+                take_profits=json.dumps(sig.take_profits) if sig else None,
+                stop_loss=sig.stop_loss if sig else None,
                 status=status,
                 decision_reason=outcome.reason,
             )
