@@ -113,6 +113,29 @@ The Telethon session is persisted in `./sessions` so you log in once.
 - `clonerbot stats` — print channel reputation and PnL.
 - `clonerbot check` — validate config and exchange connectivity, then exit.
 
+## Autonomous learning (freqtrade-inspired)
+
+Ideas ported from [freqtrade](https://github.com/freqtrade/freqtrade), adapted to
+copy-trading:
+
+- **Adaptive sizing (Edge-style expectancy).** The bot measures each channel's
+  average return per closed trade and sizes accordingly — proven channels get
+  more, and channels whose expectancy turns non-positive are **skipped
+  automatically** (`USE_EXPECTANCY_SIZING`, `MIN_EXPECTANCY`,
+  `EXPECTANCY_MIN_TRADES`). This is the core "learning" loop: allocation follows
+  demonstrated results.
+- **Protections (safety locks).** After a trade closes a channel enters a brief
+  **cooldown**; a cluster of stop-losses trips a global **StoplossGuard** that
+  pauses all trading; a **losing streak** locks the offending channel. Locks are
+  time-bounded, persisted, and enforced by the risk engine.
+- **Time-based exit.** Optionally close any position still open after
+  `MAX_HOLD_MINUTES`.
+
+Deliberately **not** ported (different problem / far larger scope): freqtrade's
+indicator-strategy engine, backtesting, hyperopt and FreqAI. Our "backtest" is
+the paper-trading + expectancy loop; historical-signal backtesting is a possible
+future addition since every signal is already logged.
+
 ## Channel discovery (optional, OFF by default)
 
 The bot can find candidate signal channels for you instead of you listing them

@@ -43,6 +43,7 @@ class OpenPos:
     take_profit: float | None
     cost: float  # cash spent incl. fees (paper) / notional (live)
     high_water: float = 0.0  # highest mark seen, for the trailing stop
+    opened_at: datetime | None = None  # for the max-hold time exit
 
 
 @dataclass
@@ -57,6 +58,8 @@ class Executor:
     promotion: object | None = None
     # Optional async callable(text) to notify the operator of open/close events.
     notifier: object | None = None
+    # Optional ProtectionManager — applies safety locks after each close.
+    protections: object | None = None
     paper: PaperBroker = field(init=False)
     open_positions: dict[str, OpenPos] = field(default_factory=dict)  # symbol -> pos
     killed: bool = False
@@ -197,6 +200,7 @@ class Executor:
             id=pos_id, exchange=exchange_id, symbol=plan.symbol, channel=channel,
             qty=qty, entry_price=fill_price, stop_loss=plan.stop_loss,
             take_profit=plan.take_profit, cost=cost, high_water=fill_price,
+            opened_at=datetime.now(timezone.utc),
         )
         self.open_positions[plan.symbol] = pos
         log.info(
@@ -246,12 +250,19 @@ class Executor:
             "executor.closed", id=pos.id, symbol=symbol, reason=reason,
             exit=exit_price, pnl=round(pnl, 2), realized_today=round(self._realized_today, 2),
         )
-        reason_ru = {"tp": "тейк 🎯", "sl": "стоп 🛑", "kill": "аварийный стоп"}.get(reason, reason)
+        reason_ru = {"tp": "тейк 🎯", "sl": "стоп 🛑", "kill": "аварийный стоп",
+                     "time": "время ⏱"}.get(reason, reason)
         icon = "🟢" if pnl > 0 else ("🔴" if pnl < 0 else "⚪")
         await self._notify(
             f"{self._tag} · <b>Закрыта</b> {symbol} {icon} <b>{pnl:+,.2f}</b>\n"
             f"причина: {reason_ru} · 📡 {pos.channel}"
         )
+        # Apply protections (cooldown / stoploss-guard / losing-streak locks).
+        if self.protections is not None:
+            try:
+                await self.protections.on_close(pos.channel, symbol, pnl, reason)
+            except Exception as exc:
+                log.warning("executor.protections_hook_failed", error=str(exc))
         # Let the promotion service re-evaluate this channel's track record.
         if self.promotion is not None:
             try:
@@ -295,6 +306,15 @@ class Executor:
                 await self.close_position(symbol, "sl")
             elif pos.take_profit is not None and price >= pos.take_profit:
                 await self.close_position(symbol, "tp")
+            elif self._max_hold_exceeded(pos):
+                await self.close_position(symbol, "time")
+
+    def _max_hold_exceeded(self, pos: OpenPos) -> bool:
+        limit = self.settings.max_hold_minutes
+        if limit <= 0 or pos.opened_at is None:
+            return False
+        age_min = (datetime.now(timezone.utc) - pos.opened_at).total_seconds() / 60
+        return age_min >= limit
 
     async def _apply_trailing(self, pos: OpenPos, price: float) -> None:
         """Ratchet the stop upward as price makes new highs (never downward).
@@ -352,7 +372,7 @@ class Executor:
                 id=row.id, exchange=row.exchange, symbol=row.symbol, channel=row.channel,
                 qty=row.qty, entry_price=row.entry_price, stop_loss=row.stop_loss or 0.0,
                 take_profit=row.take_profit, cost=row.qty * row.entry_price,
-                high_water=row.entry_price,
+                high_water=row.entry_price, opened_at=row.opened_at,
             )
         if rows:
             log.info("executor.recovered", count=len(rows))

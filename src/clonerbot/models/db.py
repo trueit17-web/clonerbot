@@ -99,6 +99,23 @@ class EquitySnapshot(Base):
     realized_pnl_day: Mapped[float] = mapped_column(Float, default=0.0)
 
 
+class PairLock(Base):
+    """A time-bounded trading lock (freqtrade-style protections).
+
+    `scope_key` is one of: "global", "channel:<name>", "symbol:<SYM>". While an
+    active lock (until > now) matches any of a signal's keys, the risk engine
+    refuses to open. Persisted so locks survive restarts.
+    """
+
+    __tablename__ = "pair_locks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scope_key: Mapped[str] = mapped_column(String(160), index=True)
+    reason: Mapped[str] = mapped_column(String(128))
+    locked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    until: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class RuntimeSetting(Base):
     """Small key→value store for settings changed at runtime via the bot
     (e.g. the live/paper mode override), so they persist across restarts."""

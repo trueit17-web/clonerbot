@@ -106,6 +106,19 @@ async def test_notifier_fires_on_open_and_close(fake_router):
     assert any("Закрыта" in e and "тейк" in e for e in events)
 
 
+async def test_max_hold_time_exit(fake_router):
+    from datetime import timedelta
+
+    ex = Executor(settings=_settings(max_hold_minutes=1), router=fake_router,
+                  scorer=ChannelScorer())
+    await ex.open_position(_plan(), channel="@vip", signal_id=None)
+    pos = ex.open_positions["BTC/USDT"]
+    pos.opened_at = datetime.now(timezone.utc) - timedelta(minutes=2)  # aged out
+    fake_router.set_price("BTC/USDT", 61000.0)  # between SL and TP (no SL/TP trigger)
+    await ex._check_positions()
+    assert "BTC/USDT" not in ex.open_positions  # closed by max-hold
+
+
 async def test_recover_open_positions(fake_router):
     ex1 = Executor(settings=_settings(), router=fake_router, scorer=ChannelScorer())
     await ex1.open_position(_plan(), channel="@vip", signal_id=None)

@@ -34,10 +34,19 @@ class Application:
         self.settings = settings
         self.queue = build_queue(settings.redis_url or None)
         self.router = ExchangeRouter(settings)
-        self.scorer = ChannelScorer()
+        # Expectancy-aware scorer (Edge-style learning) needs settings.
+        self.scorer = ChannelScorer(settings)
         self.parser = SignalParser(LLMParser(), use_llm=bool(settings.anthropic_api_key))
-        self.executor = Executor(settings=settings, router=self.router, scorer=self.scorer)
-        self.risk = RiskEngine(settings, self.scorer)
+        # Protections (freqtrade-style locks) shared by risk + executors.
+        from clonerbot.risk.protections import LockStore, ProtectionManager
+
+        self.locks = LockStore()
+        self.protections = ProtectionManager(settings, self.locks)
+        self.executor = Executor(
+            settings=settings, router=self.router, scorer=self.scorer,
+            protections=self.protections,
+        )
+        self.risk = RiskEngine(settings, self.scorer, locks=self.locks)
         self.listener = TelegramListener(settings, self.queue)
         self._stop = asyncio.Event()
 
@@ -77,6 +86,7 @@ class Application:
         self.shadow = Executor(
             settings=settings, router=self.router, scorer=self.scorer,
             force_paper=True, promotion=promotion, notifier=self.notifier,
+            protections=self.protections,
         )
         self.executor.notifier = self.notifier
         self.finder = (

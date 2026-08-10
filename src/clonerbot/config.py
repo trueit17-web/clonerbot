@@ -113,6 +113,28 @@ class Settings(BaseSettings):
     # Auto-demote back to observe if win rate falls below this after enough trades.
     demote_winrate: float = 0.40
 
+    # --- Protections (freqtrade-inspired safety locks) ---
+    protections_enabled: bool = True
+    # Cooldown: after a channel's trade closes, don't take another from it for N min.
+    cooldown_minutes: int = 3
+    # StoplossGuard: this many stop-loss exits within the window → pause ALL trading.
+    stoploss_guard_count: int = 3
+    stoploss_guard_window_min: int = 60
+    stoploss_guard_lock_min: int = 60
+    # LosingStreak: this many consecutive losing closes on a channel → lock it.
+    losing_streak_count: int = 4
+    losing_streak_lock_min: int = 180
+
+    # --- Adaptive sizing (Edge-inspired expectancy) ---
+    # Learn from results: size by each channel's measured expectancy and skip
+    # channels whose expectancy is non-positive once they have a track record.
+    use_expectancy_sizing: bool = True
+    expectancy_min_trades: int = 8       # min closed trades before expectancy applies
+    min_expectancy: float = 0.0          # skip channel if avg return per trade <= this
+
+    # --- Time-based exit ---
+    max_hold_minutes: int = 0            # 0 = disabled; else close a position after N min
+
     # ------------------------------------------------------------------
     # Parsers for comma-separated / JSON env values
     # ------------------------------------------------------------------

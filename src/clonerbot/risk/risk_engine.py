@@ -64,9 +64,10 @@ class TradePlan:
 
 
 class RiskEngine:
-    def __init__(self, settings: Settings, scorer: ChannelScorer) -> None:
+    def __init__(self, settings: Settings, scorer: ChannelScorer, locks=None) -> None:
         self._s = settings
         self._scorer = scorer
+        self._locks = locks  # LockStore | None — protections; None disables checks
 
     async def evaluate(
         self,
@@ -82,6 +83,16 @@ class RiskEngine:
             return reject("KILL switch engaged")
         if state.equity <= 0:
             return reject("no equity")
+
+        # 0b) Protections: refuse while a lock (global / channel / symbol) is active.
+        if self._locks is not None:
+            from clonerbot.risk.protections import GLOBAL_KEY, channel_key, symbol_key
+
+            locked = await self._locks.active_reason(
+                [GLOBAL_KEY, channel_key(signal.channel), symbol_key(signal.symbol)]
+            )
+            if locked:
+                return reject(f"locked: {locked}")
 
         # 1) Spot semantics: we only open with buys. Sells are handled as
         #    close-signals elsewhere, not as new positions here.
@@ -125,8 +136,12 @@ class RiskEngine:
         if stop_distance < 1e-4:
             return reject("stop too tight")
 
-        # 7) Sizing
+        # 7) Sizing — multiplier is learned from the channel's track record
+        #    (Edge-style expectancy). A non-positive multiplier means the channel
+        #    has proven unprofitable → skip it.
         mult = await self._scorer.multiplier(signal.channel)
+        if mult <= 0:
+            return reject("channel expectancy non-positive")
         risk_amount = state.equity * s.risk_per_trade * mult
         qty = risk_amount / (entry * stop_distance)
 
