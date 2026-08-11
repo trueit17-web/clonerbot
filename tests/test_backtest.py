@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
+
 from clonerbot.backtest.engine import (
     Backtester,
     BacktestSignal,
     simulate_trade,
+    trade_return,
 )
 
 
@@ -102,6 +105,46 @@ async def test_backtester_entry_fallback_to_first_open():
     report = await Backtester(src, default_stop=0.03).run([sig])
     tr = report.per_channel["@x"]
     assert tr.trades == 1 and tr.wins == 1
+
+
+# -------------------------------------------------------------- shorts + leverage
+def test_short_take_profit_and_stop():
+    # short: tp below, stop above.
+    down = [_candle(100, 101, 88, 90)]
+    reason, px = simulate_trade(down, entry=100, stop_loss=105, take_profit=90, side="sell")
+    assert reason == "tp" and px == 90
+    up = [_candle(100, 108, 99, 106)]
+    reason, px = simulate_trade(up, entry=100, stop_loss=105, take_profit=90, side="sell")
+    assert reason == "sl" and px == 105
+
+
+def test_trade_return_sign_by_side():
+    assert trade_return("buy", 100, 110) == pytest.approx(0.10)
+    assert trade_return("sell", 100, 90) == pytest.approx(0.10)   # short gains on drop
+    assert trade_return("sell", 100, 110) == pytest.approx(-0.10)
+
+
+def test_leverage_multiplies_return():
+    assert trade_return("buy", 100, 110, leverage=5) == pytest.approx(0.50)
+
+
+def test_liquidation_on_long_with_leverage():
+    # 10x long: liquidation ≈ entry*0.9 = 90. A drop to 89 liquidates.
+    candles = [_candle(100, 101, 89, 95)]
+    reason, px = simulate_trade(candles, entry=100, stop_loss=80, take_profit=120,
+                                side="buy", leverage=10)
+    assert reason == "liq" and px == pytest.approx(90.0)
+    # leveraged return at liquidation ≈ -100% of margin
+    assert trade_return("buy", 100, px, leverage=10) == pytest.approx(-1.0)
+
+
+async def test_backtester_short_profits_on_drop():
+    src = _FakeSource({"ETH/USDT": [_candle(100, 101, 88, 90)]})
+    sig = BacktestSignal("@s", "ETH/USDT", 0, entry=100, stop_loss=105,
+                         take_profit=90, side="sell")
+    report = await Backtester(src).run([sig])
+    assert report.per_channel["@s"].wins == 1
+    assert report.per_channel["@s"].avg_return > 0
 
 
 async def test_backtester_skips_missing_history():

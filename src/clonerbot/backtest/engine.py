@@ -32,6 +32,8 @@ class BacktestSignal:
     entry: float
     stop_loss: float
     take_profit: float | None
+    side: str = "buy"        # "buy" = long, "sell" = short
+    leverage: float = 1.0
 
 
 @dataclass
@@ -44,6 +46,14 @@ class TradeResult:
     ret: float         # fractional return of the spot long
 
 
+def trade_return(side: str, entry: float, exit_price: float, leverage: float = 1.0) -> float:
+    """Margin return of a trade: price move in the position's favor × leverage."""
+    if entry <= 0:
+        return 0.0
+    r = (exit_price - entry) / entry if side == "buy" else (entry - exit_price) / entry
+    return r * leverage
+
+
 def simulate_trade(
     candles: list[Candle],
     entry: float,
@@ -51,32 +61,56 @@ def simulate_trade(
     take_profit: float | None,
     max_hold_bars: int = 0,
     trailing_pct: float = 0.0,
+    side: str = "buy",
+    leverage: float = 1.0,
 ) -> tuple[str, float]:
     """Walk candles after entry and return (reason, exit_price).
 
-    Conservative when a single candle spans both stop and target: assume the
-    stop is hit first. With `trailing_pct` the stop ratchets up to
-    high_water*(1-trailing_pct) using highs from PRIOR candles (so it can't
-    trail up and stop out within the same candle). `max_hold_bars` (0 =
-    unlimited) closes at that bar's close; if candles run out, close at last.
+    Direction-aware (long/short) with leverage-based liquidation. Conservative
+    when a single candle spans both stop and target: the stop is assumed first.
+    Trailing ratchets the stop toward price using PRIOR-candle extremes (so it
+    can't trail and stop out within the same candle). reason ∈
+    {sl, tp, liq, time, end, no_data}.
     """
     if not candles:
         return "no_data", entry
+    long = side == "buy"
     stop = stop_loss
-    high_water = entry
+    # Liquidation price (only meaningful with leverage > 1).
+    liq = None
+    if leverage and leverage > 1:
+        liq = entry * (1 - 1 / leverage) if long else entry * (1 + 1 / leverage)
+    water = entry  # high-water (long) / low-water (short) for trailing
     last_close = entry
     for i, c in enumerate(candles):
         _, _o, high, low, close, *_ = c
         last_close = close
-        if low <= stop:
-            return "sl", stop
-        if take_profit is not None and high >= take_profit:
-            return "tp", take_profit
+        if long:
+            # Barrier hit first as price falls = the one closest to entry (higher).
+            barrier, reason = stop, "sl"
+            if liq is not None and liq > barrier:
+                barrier, reason = liq, "liq"
+            if low <= barrier:
+                return reason, barrier
+            if take_profit is not None and high >= take_profit:
+                return "tp", take_profit
+        else:
+            barrier, reason = stop, "sl"
+            if liq is not None and liq < barrier:
+                barrier, reason = liq, "liq"
+            if high >= barrier:
+                return reason, barrier
+            if take_profit is not None and low <= take_profit:
+                return "tp", take_profit
         if max_hold_bars and (i + 1) >= max_hold_bars:
             return "time", close
         if trailing_pct > 0:
-            high_water = max(high_water, high)
-            stop = max(stop, high_water * (1 - trailing_pct))
+            if long:
+                water = max(water, high)
+                stop = max(stop, water * (1 - trailing_pct))
+            else:
+                water = min(water, low)
+                stop = min(stop, water * (1 + trailing_pct))
     return "end", last_close
 
 
@@ -146,18 +180,23 @@ class Backtester:
                 report.skipped += 1
                 continue
             # Resolve fallbacks: entry = signal entry or first candle open;
-            # stop = signal stop or a default fraction below entry.
+            # stop = signal stop or a default fraction (mirrored for shorts).
             entry = sig.entry if sig.entry > 0 else float(candles[0][1])
             if entry <= 0:
                 report.skipped += 1
                 continue
-            stop = sig.stop_loss if sig.stop_loss > 0 else entry * (1 - self._default_stop)
+            if sig.stop_loss > 0:
+                stop = sig.stop_loss
+            else:
+                stop = (entry * (1 - self._default_stop) if sig.side == "buy"
+                        else entry * (1 + self._default_stop))
             reason, exit_price = simulate_trade(
-                candles, entry, stop, sig.take_profit, self._max_hold
+                candles, entry, stop, sig.take_profit, self._max_hold,
+                side=sig.side, leverage=sig.leverage,
             )
             if reason == "no_data":
                 report.skipped += 1
                 continue
-            ret = (exit_price - entry) / entry
+            ret = trade_return(sig.side, entry, exit_price, sig.leverage)
             report.record(TradeResult(sig.channel, sig.symbol, reason, entry, exit_price, ret))
         return report

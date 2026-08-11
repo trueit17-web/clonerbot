@@ -69,6 +69,16 @@ class ExchangeRouter:
             if cred.enabled:
                 self.add_client(cred.exchange, cred.to_ccxt())
 
+    async def exchange_positions(self) -> list[dict]:
+        """Open positions reported by every exchange (the real source of truth)."""
+        out: list[dict] = []
+        for client in self._clients.values():
+            try:
+                out += await client.fetch_positions()
+            except Exception as exc:
+                log.warning("router.positions_failed", exchange=client.exchange_id, error=str(exc))
+        return out
+
     async def status_all(self, quote: str = "USDT") -> list[ExchangeStatus]:
         """Probe every configured exchange for connectivity/auth/balance."""
         out: list[ExchangeStatus] = []

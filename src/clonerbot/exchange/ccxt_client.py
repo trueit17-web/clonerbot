@@ -70,6 +70,30 @@ class CcxtClient:
         free = bal.get("free", {}) or {}
         return float(free.get(quote, 0.0) or 0.0)
 
+    async def fetch_positions(self) -> list[dict]:
+        """Open positions on the exchange, normalized. Empty on error/none."""
+        try:
+            raw = await self._get().fetch_positions()
+        except Exception as exc:
+            log.warning("ccxt.fetch_positions_failed", exchange=self.exchange_id, error=str(exc))
+            return []
+        out: list[dict] = []
+        for p in raw or []:
+            qty = float(p.get("contracts") or p.get("contractSize") or 0)
+            if not qty:
+                continue
+            side = str(p.get("side") or "").lower()
+            out.append({
+                "exchange": self.exchange_id,
+                "symbol": p.get("symbol"),
+                "side": "sell" if side in ("short", "sell") else "buy",
+                "qty": qty,
+                "entry": float(p.get("entryPrice") or 0),
+                "pnl": float(p.get("unrealizedPnl") or 0),
+                "leverage": float(p.get("leverage") or 0),
+            })
+        return out
+
     async def create_market_buy(self, symbol: str, qty: float, reduce_only: bool = False) -> dict:
         params = {"reduceOnly": True} if reduce_only else {}
         return await self._get().create_order(symbol, "market", "buy", qty, None, params)

@@ -171,6 +171,38 @@ class BitunixClient:
     async def create_market_sell(self, symbol: str, qty: float, reduce_only: bool = False) -> dict:
         return await self._place(symbol, "SELL", qty, reduce_only)
 
+    async def fetch_positions(self) -> list[dict]:
+        """Open positions on Bitunix, normalized. Empty on error/none."""
+        try:
+            data = await self._get(
+                "/api/v1/futures/position/get_pending_positions", {}, signed=True
+            )
+        except Exception as exc:
+            log.warning("bitunix.fetch_positions_failed", error=str(exc))
+            return []
+        rows = data if isinstance(data, list) else (
+            data.get("positionList") or data.get("list") or data.get("data") or []
+        )
+        out: list[dict] = []
+        for p in rows or []:
+            if not isinstance(p, dict):
+                continue
+            qty = float(p.get("qty") or p.get("positionAmt") or p.get("size") or 0)
+            if not qty:
+                continue
+            side = str(p.get("side") or p.get("positionSide") or "").lower()
+            out.append({
+                "exchange": "bitunix",
+                "symbol": p.get("symbol"),
+                "side": "sell" if side in ("sell", "short") else "buy",
+                "qty": qty,
+                "entry": float(p.get("avgOpenPrice") or p.get("entryPrice")
+                               or p.get("avgPrice") or 0),
+                "pnl": float(p.get("unrealizedPNL") or p.get("unrealizedPnl") or 0),
+                "leverage": float(p.get("leverage") or 0),
+            })
+        return out
+
     async def amount_to_precision(self, symbol: str, qty: float) -> float:
         # Floor to the configured decimals (Bitunix rejects over-precise qty).
         factor = 10 ** self._qty_decimals

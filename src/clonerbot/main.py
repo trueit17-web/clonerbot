@@ -76,10 +76,12 @@ async def _backtest(args) -> None:
 
     settings = get_settings()
     await init_db()
-    signals = await load_signals(channel=args.channel)
+    signals = await load_signals(channel=args.channel, leverage=args.leverage)
     if not signals:
-        print("No replayable BUY signals found. Let the bot log some signals first.")
+        print("No replayable signals found. Let the bot log some signals first.")
         return
+    longs = sum(1 for s in signals if s.side == "buy")
+    print(f"({longs} long / {len(signals) - longs} short, leverage {args.leverage:g}x)")
     print(f"Loaded {len(signals)} signal(s). Fetching history from {args.exchange} "
           f"({args.timeframe}, up to {args.bars} bars each)…")
     src = CcxtHistory(args.exchange)
@@ -118,12 +120,12 @@ async def _optimize(args) -> None:
     from clonerbot.db import init_db
 
     await init_db()
-    signals = await load_signals(channel=args.channel)
+    signals = await load_signals(channel=args.channel, leverage=args.leverage)
     if not signals:
-        print("No replayable BUY signals found. Let the bot log some signals first.")
+        print("No replayable signals found. Let the bot log some signals first.")
         return
     print(f"Loaded {len(signals)} signal(s). Fetching history once from {args.exchange} "
-          f"({args.timeframe})…")
+          f"({args.timeframe}, leverage {args.leverage:g}x)…")
     src = CcxtHistory(args.exchange)
     try:
         cached = await prefetch(src, signals, args.timeframe, args.bars)
@@ -195,6 +197,8 @@ def main() -> None:
     parser.add_argument("--channel", default=None, help="restrict to one channel (backtest/stats)")
     parser.add_argument("--min-trades", type=int, default=10,
                         help="min trades for a combo to qualify (optimize)")
+    parser.add_argument("--leverage", type=float, default=1.0,
+                        help="leverage applied in the simulation (backtest/optimize)")
     args = parser.parse_args()
 
     configure_logging(json_logs=args.json_logs, level=args.log_level)

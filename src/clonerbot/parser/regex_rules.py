@@ -30,19 +30,35 @@ _PAIR = re.compile(
     re.IGNORECASE,
 )
 _BARE_TICKER = re.compile(r"(?:[#$])(?P<base>[A-Za-z]{2,10})\b")
+# A bare ticker sitting right next to a direction word: "BTC LONG", "SHORT ETH".
+_DIR_TICKER = re.compile(
+    r"\b(?P<b1>[A-Za-z]{2,10})\s+(?:long|short|buy|sell|лонг|шорт)\b"
+    r"|\b(?:long|short|buy|sell|лонг|шорт)\s+(?P<b2>[A-Za-z]{2,10})\b",
+    re.IGNORECASE,
+)
+# Words that are never a coin ticker (avoid mis-reading "BUY BTC" as base=BUY).
+_NOT_TICKER = {"BUY", "SELL", "LONG", "SHORT", "ЛОНГ", "ШОРТ", "USDT", "USDC", "USD"}
 
 _NUM = r"(\d+(?:[.,]\d+)?)"
 
+# Skip an optional ordinal index after a label — e.g. "TP 1", "Target 2",
+# "Take Profit 1 (TP1)" — so the index is not mistaken for the value. The index
+# is only consumed when it is clearly an index (followed by ) ( : or =, or a
+# parenthesised label), never when it's actually the price (e.g. "tp 4370").
+_IDX = r"(?:\s*\d{1,2}(?=\s*[):=(]))?\s*(?:\([^)]*\))?"
+
 _ENTRY = re.compile(
-    rf"(?:entry|enter|buy\s*zone|zone|вход|цена)\D{{0,12}}?{_NUM}(?:\s*[-–—to]+\s*{_NUM})?",
+    rf"(?:entry|enter|buy\s*zone|zone|вход|цена){_IDX}\D{{0,10}}?"
+    rf"{_NUM}(?:\s*[-–—to]+\s*{_NUM})?",
     re.IGNORECASE,
 )
 _TP = re.compile(
-    rf"(?:tp\d*|target\w*|take[\s-]?profit|тейк|цел\w*)\D{{0,12}}?((?:{_NUM}[,\s/]*)+)",
+    rf"(?:take[\s-]?profit|tp|target\w*|тейк\w*|цел\w*){_IDX}\D{{0,10}}?"
+    rf"((?:{_NUM}[,\s/]*)+)",
     re.IGNORECASE,
 )
 _SL = re.compile(
-    rf"(?:sl|stop[\s-]?loss|stop|стоп)\D{{0,12}}?{_NUM}",
+    rf"(?:stop[\s-]?loss|sl|stop|стоп\w*){_IDX}\D{{0,10}}?{_NUM}",
     re.IGNORECASE,
 )
 _LEV = re.compile(rf"(?:lev\w*|leverage|плечо|x)\s*[:=]?\s*{_NUM}\s*x?", re.IGNORECASE)
@@ -89,15 +105,24 @@ def parse_regex(text: str) -> RegexParseResult | None:
         res.side = "buy"
     # else leave default buy but it costs confidence below
 
-    # Pair
-    m = _PAIR.search(text)
-    if m:
-        res.base = m.group("base").upper()
-        res.quote = m.group("quote").upper()
-    else:
+    # Pair. Ignore matches whose "base" is actually a direction word
+    # (e.g. "BUY BTC" must not become base=BUY, quote=BTC).
+    for m in _PAIR.finditer(text):
+        base = m.group("base").upper()
+        if base not in _NOT_TICKER:
+            res.base = base
+            res.quote = m.group("quote").upper()
+            break
+    if res.base is None:
         m2 = _BARE_TICKER.search(text)
-        if m2:
+        if m2 and m2.group("base").upper() not in _NOT_TICKER:
             res.base = m2.group("base").upper()
+    if res.base is None:
+        m3 = _DIR_TICKER.search(text)
+        if m3:
+            cand = (m3.group("b1") or m3.group("b2") or "").upper()
+            if cand and cand not in _NOT_TICKER:
+                res.base = cand
 
     # Entry (single or zone)
     me = _ENTRY.search(text)

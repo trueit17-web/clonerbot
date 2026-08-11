@@ -200,18 +200,38 @@ class ControlBot:
             f"🚨 Аварийный стоп: {kill}"
         )
 
-    def positions_text(self) -> str:
-        pos = self._executor.open_positions
-        if not pos:
-            return "📈 Открытых позиций нет."
-        lines = ["<b>📈 Открытые позиции</b>"]
-        for p in pos.values():
-            lines.append(
-                f"• <b>{_esc(p.symbol)}</b> — {p.qty:.6f} @ {p.entry_price:g}\n"
-                f"   🛑 стоп {p.stop_loss:g} · 🎯 тейк {p.take_profit if p.take_profit else '—'}"
-                f" · 📡 {_esc(p.channel)}"
-            )
-        return "\n".join(lines)
+    async def positions_text(self) -> str:
+        lines: list[str] = []
+        # Real positions on the exchange (source of truth — includes any opened
+        # outside the bot or before a restart).
+        if self._router.has_exchanges:
+            try:
+                exps = await self._router.exchange_positions()
+            except Exception as exc:
+                exps = []
+                log.warning("control.positions_failed", error=str(exc))
+            if exps:
+                lines.append("<b>📈 Позиции на бирже</b>")
+                for p in exps:
+                    d = "🟢 LONG" if p["side"] == "buy" else "🔴 SHORT"
+                    lev = f" {p['leverage']:g}x" if p.get("leverage") else ""
+                    lines.append(
+                        f"• {_esc(p['exchange'])} <b>{_esc(p['symbol'])}</b> {d}{lev} — "
+                        f"{p['qty']:g} @ {p['entry']:g} · PnL {p['pnl']:+,.2f}"
+                    )
+        # Positions the bot is actively managing (with SL/TP).
+        bot = self._executor.open_positions
+        if bot:
+            lines.append("\n<b>🤖 Под управлением бота</b>")
+            for p in bot.values():
+                d = "🟢 LONG" if p.is_long else "🔴 SHORT"
+                lev = f" {p.leverage:g}x" if p.leverage and p.leverage != 1 else ""
+                tp = p.take_profit if p.take_profit else "—"
+                lines.append(
+                    f"• <b>{_esc(p.symbol)}</b> {d}{lev} — {p.qty:.6f} @ {p.entry_price:g}\n"
+                    f"   🛑 стоп {p.stop_loss:g} · 🎯 тейк {tp} · 📡 {_esc(p.channel)}"
+                )
+        return "\n".join(lines) if lines else "📈 Открытых позиций нет."
 
     async def history_text(self, limit: int = 15) -> str:
         async with session_scope() as s:
@@ -319,7 +339,7 @@ class ControlBot:
         async def _positions(message):  # noqa: ANN001
             if await deny(message):
                 return
-            await message.answer(self.positions_text(), parse_mode="HTML")
+            await message.answer(await self.positions_text(), parse_mode="HTML")
 
         @dp.message(F.text == kb.BTN_HISTORY)
         async def _history(message):  # noqa: ANN001

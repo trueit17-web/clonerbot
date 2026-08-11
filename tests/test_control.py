@@ -102,7 +102,7 @@ async def test_status_text_ru(fake_router):
 
 async def test_positions_text_empty(fake_router):
     bot = _bot(fake_router)
-    assert "нет" in (bot.positions_text()).lower()
+    assert "нет" in (await bot.positions_text()).lower()
 
 
 async def test_positions_text_with_position(fake_router):
@@ -110,8 +110,22 @@ async def test_positions_text_with_position(fake_router):
     plan = TradePlan(True, "ok", symbol="BTC/USDT", side=Side.buy, qty=0.01,
                      entry_price=60000.0, stop_loss=58800.0, take_profit=66000.0)
     await bot._executor.open_position(plan, channel="@vip", signal_id=None)
-    text = bot.positions_text()
+    text = await bot.positions_text()
     assert "BTC/USDT" in text and "@vip" in text
+
+
+async def test_positions_text_shows_exchange_positions():
+    # A position on the exchange the bot didn't open must still be shown.
+    class _PosRouter(_FakeExRouter):
+        async def exchange_positions(self):
+            return [{"exchange": "bitunix", "symbol": "ETH/USDT", "side": "sell",
+                     "qty": 0.5, "entry": 3000.0, "pnl": 12.5, "leverage": 5}]
+
+    router = _PosRouter()
+    router.clients["bitunix"] = object()  # make has_exchanges True
+    bot = _bot_with(router)
+    text = await bot.positions_text()
+    assert "ETH/USDT" in text and "SHORT" in text and "бирже" in text
 
 
 async def test_rating_text_empty(fake_router):

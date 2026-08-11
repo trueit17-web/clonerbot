@@ -34,6 +34,27 @@ def test_regex_short():
     assert r is not None and r.side == "sell"
 
 
+def test_tp_index_not_mistaken_for_value():
+    # "Take Profit 1 (TP1): 4370" must read 4370, not the ordinal 1.
+    r = parse_regex("BTC LONG\nEntry: 4300\nTake Profit 1 (TP1): 4370\nStop Loss: 4200")
+    assert r is not None
+    assert r.base == "BTC" and r.side == "buy"
+    assert r.entries == [4300.0]
+    assert r.take_profits == [4370.0]   # not [1.0]
+    assert r.stop_loss == 4200.0
+
+
+def test_bare_ticker_next_to_direction():
+    r = parse_regex("ETH SHORT entry 3000 TP1: 2900 SL: 3100")
+    assert r is not None and r.base == "ETH" and r.side == "sell"
+    assert r.take_profits == [2900.0] and r.stop_loss == 3100.0
+
+
+def test_direction_word_not_taken_as_ticker():
+    r = parse_regex("buy BTC entry 4300 tp 4370 sl 4200")
+    assert r is not None and r.base == "BTC"  # not "BUY"
+
+
 def test_regex_rejects_commentary():
     assert parse_regex("gm, market looking bullish, thoughts?") is None
 

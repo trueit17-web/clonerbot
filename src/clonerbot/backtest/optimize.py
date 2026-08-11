@@ -15,7 +15,7 @@ from __future__ import annotations
 import itertools
 from dataclasses import dataclass
 
-from clonerbot.backtest.engine import BacktestSignal, Candle, simulate_trade
+from clonerbot.backtest.engine import BacktestSignal, Candle, simulate_trade, trade_return
 from clonerbot.logging_conf import get_logger
 
 log = get_logger("optimize")
@@ -80,14 +80,19 @@ class Optimizer:
             entry = sig.entry if sig.entry > 0 else float(candles[0][1])
             if entry <= 0:
                 continue
-            stop = entry * (1 - combo.stop_pct)
-            tp = entry * (1 + combo.tp_pct) if combo.tp_pct > 0 else None
+            long = sig.side == "buy"
+            # Apply the combo's fixed levels, mirrored for shorts.
+            stop = entry * (1 - combo.stop_pct) if long else entry * (1 + combo.stop_pct)
+            tp = None
+            if combo.tp_pct > 0:
+                tp = entry * (1 + combo.tp_pct) if long else entry * (1 - combo.tp_pct)
             reason, px = simulate_trade(
-                candles, entry, stop, tp, combo.max_hold_bars, combo.trailing_pct
+                candles, entry, stop, tp, combo.max_hold_bars, combo.trailing_pct,
+                side=sig.side, leverage=sig.leverage,
             )
             if reason == "no_data":
                 continue
-            ret = (px - entry) / entry
+            ret = trade_return(sig.side, entry, px, sig.leverage)
             total += ret
             n += 1
             if ret > 0:

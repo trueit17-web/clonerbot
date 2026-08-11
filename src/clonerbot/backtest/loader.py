@@ -21,7 +21,8 @@ def _reference_entry(entries: list[float]) -> float:
     return sum(entries) / len(entries) if entries else 0.0
 
 
-async def load_signals(channel: str | None = None, limit: int = 5000) -> list[BacktestSignal]:
+async def load_signals(channel: str | None = None, limit: int = 5000,
+                       leverage: float = 1.0) -> list[BacktestSignal]:
     async with session_scope() as s:
         stmt = select(SignalRecord).order_by(SignalRecord.posted_at.asc()).limit(limit)
         if channel:
@@ -31,6 +32,7 @@ async def load_signals(channel: str | None = None, limit: int = 5000) -> list[Ba
     out: list[BacktestSignal] = []
     for r in rows:
         symbol = r.symbol
+        side = (r.side or "buy").lower()
         entries: list[float] = []
         tps: list[float] = []
         stop = r.stop_loss or 0.0
@@ -44,11 +46,12 @@ async def load_signals(channel: str | None = None, limit: int = 5000) -> list[Ba
         if symbol is None or (not entries and not tps and not stop):
             # Fall back to re-parsing the raw text (offline, regex only).
             rr = parse_regex(r.raw_text or "")
-            if rr is None or rr.side != "buy" or not rr.base:
+            if rr is None or not rr.base:
                 continue
             symbol = f"{rr.base}/{rr.quote}"
+            side = rr.side
             entries, tps, stop = rr.entries, rr.take_profits, (rr.stop_loss or 0.0)
-        if (r.side or "buy") != "buy" or not symbol:
+        if not symbol or side not in ("buy", "sell"):
             continue
 
         out.append(BacktestSignal(
@@ -58,5 +61,7 @@ async def load_signals(channel: str | None = None, limit: int = 5000) -> list[Ba
             entry=_reference_entry(entries),
             stop_loss=stop,
             take_profit=tps[0] if tps else None,
+            side=side,
+            leverage=leverage,
         ))
     return out
