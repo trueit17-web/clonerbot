@@ -47,6 +47,11 @@ class OpenPos:
     open_fee: float = 0.0  # futures: fee paid on entry (for realized-PnL netting)
     high_water: float = 0.0  # extreme mark seen, for the trailing stop
     opened_at: datetime | None = None  # for the max-hold time exit
+    # Scale-out across multiple take-profit levels.
+    take_profits: list[float] = field(default_factory=list)
+    tp_index: int = 0            # next TP level to hit
+    orig_qty: float = 0.0        # original size (fraction base + expectancy cost basis)
+    realized_accum: float = 0.0  # realized PnL banked from partial closes
 
     @property
     def is_long(self) -> bool:
@@ -216,6 +221,7 @@ class Executor:
             qty=qty, entry_price=fill_price, stop_loss=plan.stop_loss,
             take_profit=plan.take_profit, cost=cost, side=side, leverage=leverage,
             open_fee=open_fee, high_water=fill_price, opened_at=datetime.now(timezone.utc),
+            take_profits=list(plan.take_profits), orig_qty=qty,
         )
         self.open_positions[plan.symbol] = pos
         dir_ru = "LONG 🟢" if side == "buy" else "SHORT 🔴"
@@ -266,6 +272,8 @@ class Executor:
                 pnl = pos.qty * (pos.entry_price - exit_price)
 
         self._realized_today += pnl
+        # Total for the whole trade = this remainder + PnL banked at earlier TPs.
+        total_pnl = pnl + pos.realized_accum
 
         async with session_scope() as s:
             row = await s.get(Position, pos.id)
@@ -273,15 +281,19 @@ class Executor:
                 row.status = "closed"
                 row.closed_at = datetime.now(timezone.utc)
                 row.exit_price = exit_price
-                row.realized_pnl = pnl
+                row.realized_pnl = total_pnl
+                # Restore original size so expectancy's cost basis is the full trade.
+                row.qty = pos.orig_qty or pos.qty
                 row.close_reason = reason
 
-        await self.scorer.record_close(pos.channel, pnl)
+        await self.scorer.record_close(pos.channel, total_pnl)
         del self.open_positions[symbol]
         log.info(
-            "executor.closed", id=pos.id, symbol=symbol, reason=reason,
-            exit=exit_price, pnl=round(pnl, 2), realized_today=round(self._realized_today, 2),
+            "executor.closed", id=pos.id, symbol=symbol, reason=reason, exit=exit_price,
+            pnl=round(pnl, 2), total_pnl=round(total_pnl, 2),
+            realized_today=round(self._realized_today, 2),
         )
+        pnl = total_pnl  # notify shows the whole-trade result
         reason_ru = {"tp": "тейк 🎯", "sl": "стоп 🛑", "kill": "аварийный стоп",
                      "time": "время ⏱"}.get(reason, reason)
         icon = "🟢" if pnl > 0 else ("🔴" if pnl < 0 else "⚪")
@@ -334,20 +346,96 @@ class Executor:
             if price is None:
                 continue
             await self._apply_trailing(pos, price)
-            # Direction-aware exits: a long stops below / targets above; a short
-            # (futures) is the mirror image.
-            if pos.is_long:
-                hit_sl = price <= pos.stop_loss
-                hit_tp = pos.take_profit is not None and price >= pos.take_profit
-            else:
-                hit_sl = price >= pos.stop_loss
-                hit_tp = pos.take_profit is not None and price <= pos.take_profit
+            # Stop-loss always closes the whole remainder first (conservative).
+            hit_sl = price <= pos.stop_loss if pos.is_long else price >= pos.stop_loss
             if hit_sl:
                 await self.close_position(symbol, "sl")
-            elif hit_tp:
+                continue
+            # Multi-level take-profit → scale out; else single-level / time.
+            if pos.take_profits:
+                if await self._check_scale_out(symbol, pos, price):
+                    continue
+            elif pos.take_profit is not None and (
+                price >= pos.take_profit if pos.is_long else price <= pos.take_profit
+            ):
                 await self.close_position(symbol, "tp")
-            elif self._max_hold_exceeded(pos):
+                continue
+            if self._max_hold_exceeded(pos):
                 await self.close_position(symbol, "time")
+
+    async def _check_scale_out(self, symbol: str, pos: OpenPos, price: float) -> bool:
+        """Handle multi-TP scaling. Returns True if the position was (partly) closed."""
+        levels = pos.take_profits
+        if pos.tp_index >= len(levels):
+            return False
+        lvl = levels[pos.tp_index]
+        reached = price >= lvl if pos.is_long else price <= lvl
+        if not reached:
+            return False
+        # The final level closes the whole remainder.
+        if pos.tp_index >= len(levels) - 1:
+            await self.close_position(symbol, "tp")
+            return True
+        # Otherwise close an equal slice of the original size.
+        frac = 1.0 / len(levels)
+        qty_close = min(pos.orig_qty * frac, pos.qty)
+        await self._partial_close(pos, qty_close, pos.tp_index + 1)
+        pos.tp_index += 1
+        # After the first take-profit, move the stop to breakeven.
+        if self.settings.move_stop_to_breakeven and pos.tp_index == 1:
+            if (pos.is_long and pos.entry_price > pos.stop_loss) or (
+                not pos.is_long and pos.entry_price < pos.stop_loss
+            ):
+                pos.stop_loss = pos.entry_price
+                await self._persist_stop(pos.id, pos.entry_price)
+        return True
+
+    async def _partial_close(self, pos: OpenPos, qty_close: float, level: int) -> None:
+        """Close part of a position at a TP level; bank the PnL, keep the rest open."""
+        if qty_close <= 0 or qty_close >= pos.qty:
+            return
+        mark = await self._mark(pos.symbol, pos.entry_price)
+        frac = qty_close / pos.qty
+        if self.is_paper:
+            if self.is_futures:
+                margin_portion = pos.cost * frac
+                fee_portion = pos.open_fee * frac
+                _, pnl = self.paper.futures_close(
+                    pos.side, qty_close, pos.entry_price, mark, margin_portion, fee_portion)
+                pos.cost -= margin_portion
+                pos.open_fee -= fee_portion
+            else:
+                _, proceeds = self.paper.sell(qty_close, mark)
+                cost_portion = pos.cost * frac
+                pnl = proceeds - cost_portion
+                pos.cost -= cost_portion
+        else:
+            client = self.router.clients.get(pos.exchange)
+            if client is not None:
+                if pos.side == "buy":
+                    order = await client.create_market_sell(
+                        pos.symbol, qty_close, reduce_only=self.is_futures)
+                else:
+                    order = await client.create_market_buy(
+                        pos.symbol, qty_close, reduce_only=self.is_futures)
+                mark = float(order.get("average") or order.get("price") or mark)
+            pnl = (qty_close * (mark - pos.entry_price) if pos.side == "buy"
+                   else qty_close * (pos.entry_price - mark))
+        pos.qty -= qty_close
+        pos.realized_accum += pnl
+        self._realized_today += pnl
+        # Keep the DB size in sync so a restart recovers the remaining position.
+        async with session_scope() as s:
+            row = await s.get(Position, pos.id)
+            if row is not None:
+                row.qty = pos.qty
+        log.info("executor.partial_tp", symbol=pos.symbol, level=level,
+                 closed=round(qty_close, 8), pnl=round(pnl, 2), remaining=round(pos.qty, 8))
+        icon = "🟢" if pnl > 0 else "🔴"
+        await self._notify(
+            f"{self._tag} · <b>Частичный тейк TP{level}</b> {pos.symbol} {icon} "
+            f"<b>{pnl:+,.2f}</b>\nзакрыто {qty_close:g}, осталось {pos.qty:g} · 📡 {pos.channel}"
+        )
 
     def _max_hold_exceeded(self, pos: OpenPos) -> bool:
         limit = self.settings.max_hold_minutes
@@ -420,7 +508,7 @@ class Executor:
                 qty=row.qty, entry_price=row.entry_price, stop_loss=row.stop_loss or 0.0,
                 take_profit=row.take_profit, cost=row.qty * row.entry_price / lev,
                 side=row.side or "buy", leverage=lev, open_fee=0.0,
-                high_water=row.entry_price, opened_at=row.opened_at,
+                high_water=row.entry_price, opened_at=row.opened_at, orig_qty=row.qty,
             )
         if rows:
             log.info("executor.recovered", count=len(rows))

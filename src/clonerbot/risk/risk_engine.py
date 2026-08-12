@@ -25,7 +25,7 @@ the correct way to size — not a flat notional.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from clonerbot.config import Market, Settings
 from clonerbot.logging_conf import get_logger
@@ -59,7 +59,8 @@ class TradePlan:
     qty: float = 0.0
     entry_price: float = 0.0
     stop_loss: float = 0.0
-    take_profit: float | None = None
+    take_profit: float | None = None       # first level (back-compat)
+    take_profits: list[float] = field(default_factory=list)  # all levels, in order
     channel_multiplier: float = 1.0
     leverage: float = 1.0
 
@@ -182,15 +183,23 @@ class RiskEngine:
         if qty <= 0 or notional <= 0:
             return reject("computed qty <= 0")
 
+        # Take-profit levels, direction-aware. Override → single level; otherwise
+        # keep every signalled level on the correct side of entry (nearest first),
+        # so the executor can scale out across TP1/TP2/TP3.
         if s.take_profit_override_pct > 0:
             d = s.take_profit_override_pct
-            tp = entry * (1 + d) if is_long else entry * (1 - d)
+            tps = [entry * (1 + d)] if is_long else [entry * (1 - d)]
+        elif is_long:
+            tps = sorted(t for t in signal.take_profits if t > entry)
         else:
-            tp = signal.take_profits[0] if signal.take_profits else None
+            tps = sorted((t for t in signal.take_profits if t < entry), reverse=True)
+        if not s.partial_take_profit:
+            tps = tps[:1]
+        tp = tps[0] if tps else None
 
         plan = TradePlan(
             approved=True, reason="approved", symbol=signal.symbol, side=signal.side,
-            qty=qty, entry_price=entry, stop_loss=stop, take_profit=tp,
+            qty=qty, entry_price=entry, stop_loss=stop, take_profit=tp, take_profits=tps,
             channel_multiplier=mult, leverage=leverage,
         )
         log.info(

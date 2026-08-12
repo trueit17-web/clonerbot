@@ -129,10 +129,15 @@ def parse_regex(text: str) -> RegexParseResult | None:
     if me:
         res.entries = [_to_float(g) for g in me.groups() if g]
 
-    # Take profits (possibly several numbers)
-    mt = _TP.search(text)
-    if mt:
-        res.take_profits = [_to_float(g.group()) for g in _NUM_ONLY.finditer(mt.group(1))]
+    # Take profits — collect ALL levels across the message. Channels write them
+    # inline ("targets 64000, 66000") or as separate lines ("TP1: .. TP2: ..").
+    tps: list[float] = []
+    for mt in _TP.finditer(text):
+        for g in _NUM_ONLY.finditer(mt.group(1)):
+            tps.append(_to_float(g.group()))
+    # De-duplicate while keeping first-seen order.
+    seen: set[float] = set()
+    res.take_profits = [t for t in tps if not (t in seen or seen.add(t))]
 
     # Stop loss
     ms = _SL.search(text)

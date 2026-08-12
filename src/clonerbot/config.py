@@ -149,6 +149,13 @@ class Settings(BaseSettings):
     # --- Time-based exit ---
     max_hold_minutes: int = 0            # 0 = disabled; else close a position after N min
 
+    # --- Partial take-profits (scale-out across TP1/TP2/TP3) ---
+    # Close the position in parts at each take-profit level a signal provides,
+    # instead of all-at-once on the first. The last level closes the remainder.
+    partial_take_profit: bool = True
+    # After the first take-profit fills, move the stop to entry (breakeven).
+    move_stop_to_breakeven: bool = True
+
     # --- Signal-level overrides (0 = follow the signal's own SL/TP) ---
     # When > 0, compute SL/TP from entry instead of trusting the signal. Handy
     # after `clonerbot optimize` suggests better fixed levels.
