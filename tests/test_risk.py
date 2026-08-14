@@ -161,6 +161,27 @@ async def test_reject_when_no_tradable(engine):
     assert not plan.approved and "funds" in plan.reason
 
 
+async def test_reject_no_tp_and_no_sl(engine):
+    # A signal with neither a take-profit nor a stop-loss has no risk anchor.
+    plan = await engine.evaluate(
+        _signal(stop_loss=None, take_profits=[]), _state(), 60000)
+    assert not plan.approved and "no TP or SL" in plan.reason
+
+
+async def test_allow_tp_only_when_no_sl(engine):
+    # A take-profit alone is enough of an anchor; the default stop fills the SL.
+    plan = await engine.evaluate(
+        _signal(stop_loss=None, take_profits=[66000.0]), _state(), 60000)
+    assert plan.approved
+
+
+async def test_require_tp_or_sl_can_be_disabled():
+    eng = RiskEngine(_settings(require_tp_or_sl=False), ChannelScorer())
+    plan = await eng.evaluate(
+        _signal(stop_loss=None, take_profits=[]), _state(), 60000)
+    assert plan.approved  # default stop applied, no anchor required
+
+
 async def test_stop_and_tp_overrides_applied():
     s = _settings(stop_loss_override_pct=0.02, take_profit_override_pct=0.05)
     eng = RiskEngine(s, ChannelScorer())

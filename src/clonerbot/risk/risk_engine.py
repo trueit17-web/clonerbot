@@ -114,6 +114,10 @@ class RiskEngine:
         if signal.age_seconds > s.signal_max_age_sec:
             return reject(f"stale signal ({signal.age_seconds:.0f}s old)")
 
+        # 3b) Require a risk anchor: reject signals with no TP and no SL.
+        if s.require_tp_or_sl and signal.stop_loss is None and not signal.take_profits:
+            return reject("signal has no TP or SL level")
+
         # 4) Drawdown & daily loss halts
         if state.peak_equity > 0:
             drawdown = (state.peak_equity - state.equity) / state.peak_equity

@@ -94,6 +94,9 @@ class Settings(BaseSettings):
     )
     default_stop_loss: float = 0.03
     signal_max_age_sec: int = 300
+    # Refuse to open a trade when the signal provides NEITHER a take-profit nor a
+    # stop-loss level (no risk anchor at all).
+    require_tp_or_sl: bool = True
     # Trailing stop: as price rises, the stop ratchets up to price*(1-this).
     # 0 disables trailing (fixed stop only).
     trailing_stop_pct: float = 0.0

@@ -202,6 +202,15 @@ get the menu — 📊 Статус · 📈 Позиции · 🧾 История
 ➕ Добавить канал · 📋 Кандидаты · 🔎 Искать каналы · 🛑 Стоп-торговля ·
 ▶️ Возобновить · 💸 Вывод · ⚙️ Настройки.
 
+**📊 Статус** is a dashboard: capital, floating (unrealized) PnL across open
+positions, today's realized PnL, drawdown, and lifetime win rate / cumulative
+PnL over all closed trades. **📈 Позиции** shows every open trade **in real
+time** — current mark, unrealized PnL (absolute and %), distance to the stop,
+and distance to the next take-profit level (TP1/TP2/TP3 for scaled exits) —
+with an ❌ button to close any single position on demand and a 🔄 refresh.
+Every close (stop, take-profit, time-exit, manual, or emergency stop) pushes a
+notification to admins.
+
 **⚙️ Настройки** shows per-exchange connection status (🔌 Статус бирж — a live
 check of reachability, key validity and balances **across account types**, so
 funds in a Unified/Funding wallet aren't misreported as 0), and lets you add
@@ -222,7 +231,10 @@ via `DISCOVERY_USE_TGSTAT`) is gated by `DISCOVERY_ENABLED`.
 
 - Give exchange API keys **spot-trade permission only, withdrawals disabled**.
   Withdrawals are manual, initiated by you through the control bot.
-- Keep `SYMBOL_WHITELIST` to liquid majors.
+- Keep `SYMBOL_WHITELIST` to liquid majors (empty = trade anything not in
+  `SYMBOL_BLACKLIST`).
+- `REQUIRE_TP_OR_SL=true` (default) refuses any signal that carries neither a
+  take-profit nor a stop-loss — a trade with no risk anchor is never opened.
 - `DAILY_LOSS_LIMIT` and `MAX_DRAWDOWN` auto-halt trading — they are the
   human's role in an otherwise autonomous loop.
 

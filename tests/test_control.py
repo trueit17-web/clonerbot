@@ -114,6 +114,27 @@ async def test_positions_text_with_position(fake_router):
     assert "BTC/USDT" in text and "@vip" in text
 
 
+async def test_positions_text_shows_live_metrics(fake_router):
+    # Open at 60000, mark to 63000 → +5% price, a live uPnL and distances shown.
+    bot = _bot(fake_router)
+    plan = TradePlan(True, "ok", symbol="BTC/USDT", side=Side.buy, qty=0.01,
+                     entry_price=60000.0, stop_loss=58800.0, take_profit=66000.0,
+                     take_profits=[66000.0])
+    await bot._executor.open_position(plan, channel="@vip", signal_id=None)
+    fake_router.set_price("BTC/USDT", 63000.0)
+    text = await bot.positions_text()
+    assert "реальном времени" in text     # live section header
+    assert "PnL" in text and "до стопа" in text and "TP1" in text
+
+
+async def test_positions_kb_encodes_close_and_refresh():
+    m = kb.build_positions_kb(["BTC/USDT", "ETH/USDT"])
+    datas = [b.callback_data for row in m.inline_keyboard for b in row]
+    assert f"{kb.CB_CLOSE}BTC/USDT" in datas
+    assert f"{kb.CB_CLOSE}ETH/USDT" in datas
+    assert kb.CB_REFRESH_POS in datas
+
+
 async def test_positions_text_shows_exchange_positions():
     # A position on the exchange the bot didn't open must still be shown.
     class _PosRouter(_FakeExRouter):

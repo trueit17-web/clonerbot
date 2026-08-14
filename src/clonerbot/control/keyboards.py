@@ -41,6 +41,8 @@ CB_MODE_LIVE = "mode:live"
 CB_MODE_PAPER = "mode:paper"
 CB_MODE_LIVE_YES = "mode:live:yes"
 CB_MODE_NO = "mode:no"
+CB_CLOSE = "close:"       # + symbol → close that position
+CB_REFRESH_POS = "pos:refresh"
 
 # Common spot exchanges offered when adding one via the bot.
 KNOWN_EXCHANGES = ["bybit", "binance", "bitunix", "okx", "bitget", "kucoin", "gate", "mexc"]
@@ -123,6 +125,16 @@ def build_exchange_picker_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=ex.capitalize(), callback_data=f"{CB_ADDEX}{ex}")
             for ex in KNOWN_EXCHANGES[i:i + 2]
         ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_positions_kb(symbols: list[str]) -> InlineKeyboardMarkup:
+    """Refresh + a close button per bot-managed position."""
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text=f"❌ Закрыть {s}", callback_data=f"{CB_CLOSE}{s}")]
+        for s in symbols
+    ]
+    rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data=CB_REFRESH_POS)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

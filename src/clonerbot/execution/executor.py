@@ -295,7 +295,7 @@ class Executor:
         )
         pnl = total_pnl  # notify shows the whole-trade result
         reason_ru = {"tp": "тейк 🎯", "sl": "стоп 🛑", "kill": "аварийный стоп",
-                     "time": "время ⏱"}.get(reason, reason)
+                     "time": "время ⏱", "manual": "вручную 👆"}.get(reason, reason)
         icon = "🟢" if pnl > 0 else ("🔴" if pnl < 0 else "⚪")
         await self._notify(
             f"{self._tag} · <b>Закрыта</b> {symbol} {icon} <b>{pnl:+,.2f}</b>\n"

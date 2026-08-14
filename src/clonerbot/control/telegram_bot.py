@@ -184,6 +184,21 @@ class ControlBot:
                     "Проверьте лимиты риска и баланс на бирже.")
         return "🧪 Возвращён <b>paper</b> — сделки считаются на бумаге."
 
+    # ------------------------------------------------------------------ helpers
+    @staticmethod
+    def _upnl(pos, price: float) -> float:
+        """Unrealized PnL in quote for an open position at the given price."""
+        return (pos.qty * (price - pos.entry_price) if pos.is_long
+                else pos.qty * (pos.entry_price - price))
+
+    async def _open_upnl_total(self) -> float:
+        total = 0.0
+        for p in self._executor.open_positions.values():
+            price = await self._router.price(p.symbol)
+            if price:
+                total += self._upnl(p, price)
+        return total
+
     # ------------------------------------------------------------------ content
     async def status_text(self) -> str:
         st = await self._executor.portfolio_state()
@@ -191,12 +206,27 @@ class ControlBot:
         mode = "🧪 paper" if self._executor.is_paper else "🔴 LIVE"
         kill = "🛑 ВКЛ" if st.killed else "✅ выкл"
         q = self._s.base_quote
+        upnl = await self._open_upnl_total()
+        upnl_icon = "🟢" if upnl > 0 else ("🔴" if upnl < 0 else "⚪")
+        # Overall closed-trade stats across all channels.
+        rows = await self._scorer.all_stats()
+        closed = sum(r.trades_closed for r in rows)
+        wins = sum(r.wins for r in rows)
+        cum = sum(r.cumulative_pnl for r in rows)
+        wr = wins / closed if closed else 0.0
+        dpnl = st.realized_pnl_today
+        day_icon = "🟢" if dpnl > 0 else ("🔴" if dpnl < 0 else "⚪")
         return (
-            f"<b>ClonerBot</b> — режим: {mode}\n"
+            f"<b>📊 ClonerBot — статус</b>  ({mode})\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
             f"💰 Капитал: <b>{st.equity:,.2f}</b> {q}\n"
-            f"⛰ Пик: {st.peak_equity:,.2f} · Просадка: {dd:.1%}\n"
-            f"📅 PnL за сегодня: <b>{st.realized_pnl_today:,.2f}</b> {q}\n"
-            f"📌 Открытых позиций: <b>{st.open_count}</b>\n"
+            f"⛰ Пик {st.peak_equity:,.2f} · Просадка {dd:.1%}\n"
+            f"{day_icon} PnL сегодня: <b>{st.realized_pnl_today:+,.2f}</b> {q}\n"
+            f"{upnl_icon} Плавающий PnL: <b>{upnl:+,.2f}</b> {q}\n"
+            f"📌 Открыто позиций: <b>{st.open_count}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📈 Всего сделок: <b>{closed}</b> · winrate <b>{wr:.0%}</b>\n"
+            f"💵 Суммарный PnL: <b>{cum:+,.2f}</b> {q}\n"
             f"🚨 Аварийный стоп: {kill}"
         )
 
@@ -219,18 +249,37 @@ class ControlBot:
                         f"• {_esc(p['exchange'])} <b>{_esc(p['symbol'])}</b> {d}{lev} — "
                         f"{p['qty']:g} @ {p['entry']:g} · PnL {p['pnl']:+,.2f}"
                     )
-        # Positions the bot is actively managing (with SL/TP).
+        # Positions the bot is actively managing — with LIVE metrics.
         bot = self._executor.open_positions
         if bot:
-            lines.append("\n<b>🤖 Под управлением бота</b>")
+            lines.append("\n<b>🤖 Под управлением бота</b> (в реальном времени)")
             for p in bot.values():
                 d = "🟢 LONG" if p.is_long else "🔴 SHORT"
                 lev = f" {p.leverage:g}x" if p.leverage and p.leverage != 1 else ""
-                tp = p.take_profit if p.take_profit else "—"
-                lines.append(
-                    f"• <b>{_esc(p.symbol)}</b> {d}{lev} — {p.qty:.6f} @ {p.entry_price:g}\n"
-                    f"   🛑 стоп {p.stop_loss:g} · 🎯 тейк {tp} · 📡 {_esc(p.channel)}"
-                )
+                price = await self._router.price(p.symbol)
+                head = f"• <b>{_esc(p.symbol)}</b> {d}{lev} — {p.qty:g} @ {p.entry_price:g}"
+                lines.append(head)
+                if price:
+                    upnl = self._upnl(p, price)
+                    upct = upnl / p.cost * 100 if p.cost else 0.0
+                    icon = "🟢" if upnl > 0 else ("🔴" if upnl < 0 else "⚪")
+                    # Distance to stop and next take-profit (in %).
+                    to_stop = ((price - p.stop_loss) / price if p.is_long
+                               else (p.stop_loss - price) / price) * 100
+                    nxt = (p.take_profits[p.tp_index]
+                           if p.take_profits and p.tp_index < len(p.take_profits)
+                           else p.take_profit)
+                    tp_txt = ""
+                    if nxt:
+                        to_tp = (abs(nxt - price) / price) * 100
+                        n = len(p.take_profits) or 1
+                        tp_txt = f" · 🎯 до TP{p.tp_index + 1}/{n}: {to_tp:.2f}%"
+                    lines.append(
+                        f"   💹 {price:g} · {icon} PnL <b>{upnl:+,.2f}</b> ({upct:+.1f}%)\n"
+                        f"   🛑 до стопа {to_stop:.2f}%{tp_txt} · 📡 {_esc(p.channel)}"
+                    )
+                else:
+                    lines.append(f"   🛑 стоп {p.stop_loss:g} · 📡 {_esc(p.channel)}")
         return "\n".join(lines) if lines else "📈 Открытых позиций нет."
 
     async def history_text(self, limit: int = 15) -> str:
@@ -313,7 +362,8 @@ class ControlBot:
             await message.answer(
                 "ℹ️ <b>Справка</b>\n\n"
                 "📊 Статус — капитал, PnL, просадка, стоп\n"
-                "📈 Позиции — открытые сделки\n"
+                "📈 Позиции — открытые сделки в реальном времени (PnL, до стопа/тейка); "
+                "кнопкой ❌ можно закрыть любую\n"
                 "🧾 История сделок — последние закрытые сделки с PnL\n"
                 "🏆 Рейтинг каналов — winrate и PnL по каналам\n"
                 "➕ Добавить канал — подключить канал вручную (по @имени)\n"
@@ -335,11 +385,38 @@ class ControlBot:
                 return
             await message.answer(await self.status_text(), parse_mode="HTML")
 
+        async def _send_positions(target) -> None:  # noqa: ANN001
+            text = await self.positions_text()
+            symbols = list(self._executor.open_positions.keys())
+            markup = kb.build_positions_kb(symbols) if symbols else None
+            await target.answer(text, reply_markup=markup, parse_mode="HTML")
+
         @dp.message(F.text == kb.BTN_POSITIONS)
         async def _positions(message):  # noqa: ANN001
             if await deny(message):
                 return
-            await message.answer(await self.positions_text(), parse_mode="HTML")
+            await _send_positions(message)
+
+        @dp.callback_query(F.data == kb.CB_REFRESH_POS)
+        async def _positions_refresh(cb):  # noqa: ANN001
+            if await deny(cb):
+                return
+            await _send_positions(cb.message)
+            await cb.answer("Обновлено")
+
+        @dp.callback_query(F.data.startswith(kb.CB_CLOSE))
+        async def _close_one(cb):  # noqa: ANN001
+            if await deny(cb):
+                return
+            symbol = cb.data[len(kb.CB_CLOSE):]
+            if symbol not in self._executor.open_positions:
+                await cb.answer("Позиция уже закрыта.", show_alert=True)
+                return
+            pnl = await self._executor.close_position(symbol, "manual")
+            await cb.answer(f"Закрыто: {symbol}")
+            await cb.message.answer(
+                f"✅ Позиция <b>{_esc(symbol)}</b> закрыта вручную. "
+                f"PnL: <b>{(pnl or 0):+,.2f}</b> {self._s.base_quote}", parse_mode="HTML")
 
         @dp.message(F.text == kb.BTN_HISTORY)
         async def _history(message):  # noqa: ANN001
